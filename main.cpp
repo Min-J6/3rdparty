@@ -19,13 +19,13 @@
 int main(int, char**)
 {
     // 백그라운드에서 ImGui 앱 시작
-    ImguiApp::start_background("DEEEEEEMO");
+    ImguiApp::start_background("DEO");
 
 
     int message_count = 0;
 
     // 사용자가 원했던 바로 그 코드 구조
-    while (ImguiApp::IsRunning()) {
+    while (ImguiApp::is_running()) {
 
         // 매 루프마다 렌더링 콜백 설정
         ImguiApp::show_imgui([message_count](){
