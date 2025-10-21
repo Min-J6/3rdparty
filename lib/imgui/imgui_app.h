@@ -5,6 +5,7 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <iomanip>
 #include <string>
 #include <queue>
 #include <iostream>
@@ -13,7 +14,38 @@
 #include "imgui.h"
 
 
+
+// GLFW 윈도우 구조체
 struct GLFWwindow;
+// 알림 데이터 구조체
+struct ImGui_Notification;
+
+
+
+
+
+
+
+
+
+namespace ImGui
+{
+    inline ImFont* Regular = NULL;
+    inline ImFont* Bold = NULL;
+
+
+    // 알림 센터
+    void NotificationCenter();
+
+    // 알림센터 표시 함수
+    void push_info_noti(const std::string& title, const std::string& content);
+    void push_sucesses_noti(const std::string& title, const std::string& content);
+    void push_error_noti(const std::string& title, const std::string& content);
+}
+
+
+
+
 
 
 class ImguiApp {
@@ -32,15 +64,6 @@ public:
 
 
 private:
-    // 싱글톤
-    ImguiApp() = default;
-    ImguiApp(const ImguiApp&) = delete;
-    ImguiApp& operator=(const ImguiApp&) = delete;
-
-    static ImguiApp& getInstance();
-
-
-
     // 초기화
     bool init();
 
@@ -61,6 +84,16 @@ private:
 
 
 
+
+
+    // 싱글톤
+    ImguiApp() = default;
+    ImguiApp(const ImguiApp&) = delete;
+    ImguiApp& operator=(const ImguiApp&) = delete;
+
+    static ImguiApp& getInstance();
+
+
     // 렌더링 콜백
     std::function<void()> render_callback = nullptr;
     std::mutex callback_mutex;
@@ -68,3 +101,5 @@ private:
     std::thread render_thread;
     std::atomic<bool> _is_running{false};
 };
+
+
