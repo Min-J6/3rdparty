@@ -32,14 +32,17 @@ public:
         _running.store(false);
     }
 
+
     ~SocketClient() {
         disconnect();
     }
+
 
     // 콜백 설정
     ConnectCallback on_connect;
     MessageCallback on_message;
     DisconnectCallback on_disconnect;
+
 
     bool connect() {
         if (_running.load()) {
@@ -102,7 +105,6 @@ public:
     }
 
 
-
     void send(const std::string& data) {
 
         if (!is_connected()) {
@@ -119,7 +121,6 @@ public:
             }
         });
     }
-
 
 
     void disconnect() {
@@ -143,7 +144,6 @@ public:
     }
 
 
-
     bool is_connected() const {
         return _running.load() && socket_.is_open();
     }
@@ -157,7 +157,6 @@ private:
         }
         io_context_.reset();
     }
-
 
 
     void do_read() {
@@ -176,8 +175,6 @@ private:
                 });
         });
     }
-
-
 
 
     void do_write() {
@@ -201,8 +198,6 @@ private:
                 })
             );
     }
-
-
 
 
     std::string host_;

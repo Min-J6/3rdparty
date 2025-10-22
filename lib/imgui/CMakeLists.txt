@@ -13,6 +13,7 @@ add_library(imgui
     imgui_widgets.cpp
     imgui_tables.cpp
     ImCoolBar.cpp
+    ImNotification.cpp
     backends/imgui_impl_glfw.cpp
     backends/imgui_impl_opengl3.cpp
 )

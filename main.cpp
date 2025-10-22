@@ -13,7 +13,7 @@ int main(int, char**) {
 
         // 매 루프마다 렌더링 콜백 설정
         ImguiApp::show_imgui([](){
-            ImGui::Begin("시리얼 모니터");
+            ImGui::Begin("노드 에디터 ");
 
 
 

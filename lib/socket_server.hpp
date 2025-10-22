@@ -1,6 +1,5 @@
 #pragma once
 
-
 #include <iostream>
 #include <string>
 #include <vector>
@@ -20,11 +19,6 @@
 #include <unistd.h>
 
 
-
-
-
-
-// Python 코드의 타입을 C++로 재정의
 using ClientID = int;
 using Address = std::pair<std::string, int>;
 
@@ -48,7 +42,6 @@ public:
     ConnectCallback on_connect;
     MessageCallback on_message;
     DisconnectCallback on_disconnect;
-
 
 
     // 백그라운드에서 서버 실행
@@ -173,15 +166,16 @@ public:
     }
 
 
-
 private:
     std::string host;
     int port;
     int recv_size;
 
+
     int server_sock;
     std::atomic<bool> _running;
     std::thread _accept_thread;
+
 
     std::unordered_map<ClientID, int> _clients;
     std::unordered_map<ClientID, Address> _addrs;

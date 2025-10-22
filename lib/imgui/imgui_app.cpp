@@ -16,6 +16,8 @@
 #include "icon.h"
 #include "icon.cpp"
 
+#include "ImNotification.h"
+
 
 // 윈도우 크기
 std::string TITLE               = "DEMO";
@@ -53,50 +55,7 @@ double drag_offset_x            = 0.0;
 double drag_offset_y            = 0.0;
 
 
-
-
 GLFWwindow* window;
-
-
-enum class ImGuiNotificationType {
-    Info,
-    Suceess,
-    Error
-};
-
-
-
-struct ImGui_Notification
-{
-    std::string title;              // 제목
-    std::string content;            // 내용
-    std::string timestamp;          // 시간
-    ImGuiNotificationType type;     // 타입
-    float swipeOffset = 0.0f;
-    std::chrono::steady_clock::time_point creationTime;
-
-    ImGui_Notification(const std::string& t, const std::string& c, ImGuiNotificationType type)
-        : title(t), content(c), type(type),
-          timestamp(GetTimestamp()),
-          creationTime(std::chrono::steady_clock::now()) {}
-
-    static std::string GetTimestamp()
-    {
-        auto now = std::chrono::system_clock::now();
-        auto in_time_t = std::chrono::system_clock::to_time_t(now);
-        std::tm buf{};
-
-        localtime_r(&in_time_t, &buf);
-
-        std::ostringstream oss;
-        oss << std::put_time(&buf, "%H:%M:%S");
-        return oss.str();
-    }
-};
-
-
-
-
 
 
 
@@ -107,16 +66,10 @@ ImguiApp& ImguiApp::getInstance() {
 
 
 
-
-
-
 void ImguiApp::show_imgui(std::function<void()> func) {
     std::lock_guard<std::mutex> lock(getInstance().callback_mutex);
     getInstance().render_callback = func;
 }
-
-
-
 
 
 
@@ -133,31 +86,15 @@ void ImguiApp::start_background(const std::string& title) {
 
 
 
-
-
-
-
 void ImguiApp::stop_background() {
     getInstance().stopBackground();
 }
 
 
 
-
-
-
-
-
-
 bool ImguiApp::is_running() {
     return getInstance()._is_running.load();
 }
-
-
-
-
-
-
 
 
 
@@ -290,11 +227,6 @@ bool ImguiApp::init() {
 
 
 
-
-
-
-
-
 bool ImguiApp::run() {
     _is_running.store(true);
 
@@ -394,12 +326,6 @@ bool ImguiApp::run() {
 
 
 
-
-
-
-
-
-
 void ImguiApp::show_dockspace() {
     // 도킹 크기와 위치 계산
     ImVec2 docking_content_pos = ImVec2(docking_pos.x, docking_pos.y + TITLEBAR_HEIGHT);
@@ -468,10 +394,6 @@ void ImguiApp::show_dockspace() {
     prev_docking_size = total_docking_size;
     ImGui::End();
 }
-
-
-
-
 
 
 
@@ -580,9 +502,6 @@ void ImguiApp::show_titlebar() {
 
 
 
-
-
-
 void ImguiApp::startBackground() {
     if (render_thread.joinable()) {
         std::cout << "[Error] [ImGui App]: 에러\n";
@@ -599,225 +518,9 @@ void ImguiApp::startBackground() {
 
 
 
-
-
 void ImguiApp::stopBackground() {
     _is_running.store(false);
     if (render_thread.joinable()) {
         render_thread.join();
-    }
-}
-
-
-
-
-
-// 알림센터 벡터
-inline static std::vector<ImGui_Notification> s_notifications;
-
-
-
-
-void ImGui::push_info_noti(const std::string &title, const std::string &content) {
-    s_notifications.emplace_back(title, content, ImGuiNotificationType::Info);
-}
-
-void ImGui::push_sucesses_noti(const std::string &title, const std::string &content) {
-    s_notifications.emplace_back(title, content, ImGuiNotificationType::Suceess);
-}
-
-void ImGui::push_error_noti(const std::string &title, const std::string &content) {
-    s_notifications.emplace_back(title, content, ImGuiNotificationType::Error);
-}
-
-
-
-
-
-
-void ImGui::NotificationCenter() {
-    // 색상 파레트
-    constexpr ImColor borderColor = ImColor(0.78f, 0.78f, 0.78f, 0.0f);     // No border
-    constexpr ImColor textColor = ImColor(0.95f, 0.95f, 0.95f, 1.0f);       // White text
-    constexpr ImColor subTextColor = ImColor(0.8f, 0.8f, 0.8f, 1.0f);       // Gray time
-    constexpr ImColor iconColor = ImColor(0.39f, 0.59f, 1.0f, 1.0f);        // Blue circle
-    constexpr ImColor bgColor_green = ImColor(0.18f, 0.8f, 0.44f, 0.7f);    // 산뜻한 에메랄드 그린 (Emerald Green)
-    constexpr ImColor bgColor_red = ImColor(0.9f, 0.2f, 0.2f, 0.7f);        // 경고/에러를 위한 다홍색 계열 (Crimson Red)
-    constexpr ImColor bgColor_info = ImColor(0.0f, 0.0f, 0.0f, 0.5f);       // Light gray
-
-
-    // 알림센터 관련 상수
-    constexpr float kShowDuration = 5.0f;       // 유지시간
-    constexpr float kFadeDuration = 2.0f;       // 페이드 시간
-
-    constexpr float kPadding = 8.0f;
-    constexpr float kIconSize = 26.0f;
-    constexpr float kSpacingY = 6.0f;
-    constexpr float kHeaderHeight = 30.0f;
-    constexpr float kRounding = 10.0f;
-
-    constexpr float kCardWidth = 330.0f;                    // 카드 넓이
-    constexpr float kMargin = 20.0f;                        // 왼쪽 마진
-
-    constexpr ImVec2 TITLE_OFFSET = ImVec2(8.f, 0.f);       // 제목 오프셋
-    constexpr ImVec2 CONTENT_OFFSET = ImVec2(12.f, -2.f);   // 내용 오프셋
-    constexpr ImVec2 ICON_OFFSET = ImVec2(0.f, -3.f);       // 아이콘 오프셋
-
-
-
-
-    // 알림센터 위치와 크기
-    auto* viewport = ImGui::GetMainViewport();
-    auto* drawList = ImGui::GetForegroundDrawList();
-    ImVec2 basePos = viewport->WorkPos;
-    ImVec2 workSize = viewport->WorkSize;
-
-
-    // 현재 시간
-    auto now = std::chrono::steady_clock::now();
-
-
-    // 알림 센터 표시 위치
-    float posX = basePos.x + workSize.x - kCardWidth - kMargin;
-    float posY = basePos.y + workSize.y - kMargin;
-
-
-
-    // 그리기
-    for (int i = static_cast<int>(s_notifications.size()) - 1; i >= 0; --i)
-    {
-        auto& notif = s_notifications[i];
-
-
-        // 유지 시간 및 페이드 시간 업데이트
-        float lifetime = std::chrono::duration<float>(now - notif.creationTime).count();
-        float alpha = 1.0f;
-        if (lifetime > kShowDuration)
-        {
-            float fade = lifetime - kShowDuration;
-            alpha = 1.0f - (fade / kFadeDuration);
-
-
-            // 사라질 시간이 되면 알림 벡터에서 데이터 제거
-            if (alpha <= 0.0f)
-            {
-                s_notifications.erase(s_notifications.begin() + i);
-                continue;
-            }
-        }
-
-
-        // 타입에 따른 색상 결정
-        ImColor bg;
-        if (notif.type == ImGuiNotificationType::Suceess) {
-            bg = bgColor_green; bg.Value.w *= alpha;
-        }
-        else if (notif.type == ImGuiNotificationType::Error) {
-            bg = bgColor_red; bg.Value.w *= alpha;
-        }
-        else if (notif.type == ImGuiNotificationType::Info) {
-            bg = bgColor_info; bg.Value.w *= alpha;
-        }
-
-
-
-        // 페이드 시간에 따라 alpha 값 업데이트
-        ImColor border = borderColor; border.Value.w *= alpha;
-        ImColor text = textColor;     text.Value.w *= alpha;
-        ImColor subText = subTextColor; subText.Value.w *= alpha;
-        ImColor icon = iconColor;     icon.Value.w *= alpha;
-
-
-        // 알람 카드 크기 계산
-        ImVec2 textSize = ImGui::CalcTextSize(notif.content.c_str(), nullptr, false, kCardWidth - kPadding * 2);
-        float cardHeight = kHeaderHeight + textSize.y + kPadding * 3;
-
-        ImVec2 drawMin(posX + notif.swipeOffset, posY - cardHeight);
-        ImVec2 drawMax(posX + kCardWidth + notif.swipeOffset, posY);
-
-
-
-
-
-        // 아이콘 위치, 내용 위치 계산
-        ImVec2 contentStart = drawMin + ImVec2(kPadding, kPadding);
-        ImVec2 iconCenter = contentStart + ImVec2(kIconSize * 0.5f, kIconSize * 0.5f);
-
-
-
-        // 카드 배경 그리기
-        drawList->AddRectFilled(drawMin, drawMax, bg, kRounding);
-        drawList->AddRect(drawMin, drawMax, border, kRounding);
-
-
-
-
-        // 타입에 따른 아이콘 설정
-        const char* iconText;
-        if (notif.type == ImGuiNotificationType::Info) {
-            iconText = ICON_MD_NOTIFICATIONS;
-        }
-        else if (notif.type == ImGuiNotificationType::Suceess) {
-            iconText = ICON_MD_CHECK;
-        }
-        else if (notif.type == ImGuiNotificationType::Error) {
-            iconText = ICON_MD_PRIORITY_HIGH;
-        }
-
-
-
-
-        // 아이콘 그리기
-        ImVec2 iconTextSize = ImGui::CalcTextSize(iconText);
-
-        ImVec2 iconTextPos = ImVec2(
-            iconCenter.x - iconTextSize.x * 0.5f + ICON_OFFSET.x,
-            iconCenter.y - iconTextSize.y * 0.5f + ICON_OFFSET.y
-        );
-
-
-        // 아이콘, 제목 볼드
-        ImGui::PushFont(ImGui::Bold);
-
-        drawList->AddText(iconTextPos, IM_COL32(255, 255, 255, static_cast<int>(255 * alpha)), iconText);
-
-
-
-        // 제목 그리기
-        float titleX = contentStart.x + kIconSize + TITLE_OFFSET.x;
-        float titleY = contentStart.y + TITLE_OFFSET.y;
-        drawList->AddText(ImVec2(titleX, titleY), text, notif.title.c_str());
-
-        ImGui::PopFont(); // 아이콘, 제목 볼드
-
-        // 시간 그리기
-        ImVec2 timeSize = ImGui::CalcTextSize(notif.timestamp.c_str());
-        drawList->AddText(ImVec2(drawMax.x - kPadding - timeSize.x, titleY), subText, notif.timestamp.c_str());
-
-
-
-        // 내용 그리기
-        float bodyY = contentStart.y + kHeaderHeight;
-
-        const float wrapWidth = kCardWidth - kPadding * 2;
-        const char* text2 = notif.content.c_str();
-        const char* textEnd = text2 + notif.content.size();
-        const float lineHeight = ImGui::GetFontSize() + 2.0f;
-        float y = bodyY;
-
-
-        while (text2 < textEnd)
-        {
-            const char* lineEnd = ImGui::GetFont()->CalcWordWrapPositionA(1.0f, text2, textEnd, wrapWidth);
-
-            // **수정: 알파가 적용된 'text' 변수를 사용합니다.**
-            drawList->AddText(ImVec2(contentStart.x + CONTENT_OFFSET.x, y), text, std::string(text2, lineEnd).c_str());
-
-            y += lineHeight;
-            text2 = lineEnd;
-            while (*text2 == ' ' || *text2 == '\n') ++text2; // skip space or newline
-        }
-
-        posY -= (cardHeight + kSpacingY);
     }
 }

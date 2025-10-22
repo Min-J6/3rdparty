@@ -15,39 +15,6 @@
 
 
 
-// GLFW 윈도우 구조체
-struct GLFWwindow;
-// 알림 데이터 구조체
-struct ImGui_Notification;
-
-
-
-
-
-
-
-
-
-namespace ImGui
-{
-    inline ImFont* Regular = NULL;
-    inline ImFont* Bold = NULL;
-
-
-    // 알림 센터
-    void NotificationCenter();
-
-    // 알림센터 표시 함수
-    void push_info_noti(const std::string& title, const std::string& content);
-    void push_sucesses_noti(const std::string& title, const std::string& content);
-    void push_error_noti(const std::string& title, const std::string& content);
-}
-
-
-
-
-
-
 class ImguiApp {
 public:
     // 렌더링 콜백 설정 (매 프레임마다 호출됨)
@@ -81,8 +48,6 @@ private:
 
     // 커스텀 타이틀바
     void show_titlebar();
-
-
 
 
 
