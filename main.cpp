@@ -1,7 +1,6 @@
 #include "lib/imgui/icon.h"
 #include "lib/imgui/imgui_app.h"
 #include "lib/imgui/ImCoolBar.h"
-#include "node_editor.h"
 #include <vector>
 #include <string>
 #include <memory>
@@ -208,16 +207,28 @@ public:
             }
         }
 #else
-        DIR* dir = opendir("/dev");
-        if (dir) {
+        // DIR* dir = opendir("/dev");
+        // if (dir) {
+        //     struct dirent* entry;
+        //     while ((entry = readdir(dir)) != NULL) {
+        //         std::string name = entry->d_name;
+        //         //if (name.find("ttyUSB") == 0 || name.find("ttyACM") == 0 || name.find("ttyS") == 0) {
+        //             ports.push_back("/dev/" + name);
+        //         //}
+        //     }
+        //     closedir(dir);
+        // }
+        DIR* pts_dir = opendir("/dev/pts");
+        if (pts_dir) {
             struct dirent* entry;
-            while ((entry = readdir(dir)) != NULL) {
+            while ((entry = readdir(pts_dir)) != NULL) {
                 std::string name = entry->d_name;
-                if (name.find("ttyUSB") == 0 || name.find("ttyACM") == 0 || name.find("ttyS") == 0) {
-                    ports.push_back("/dev/" + name);
+                // '.' 또는 '..' 또는 다른 PTY 파일 제외 로직이 필요할 수 있습니다.
+                if (name != "." && name != "..") {
+                    ports.push_back("/dev/pts/" + name);
                 }
             }
-            closedir(dir);
+            closedir(pts_dir);
         }
 #endif
         return ports;
