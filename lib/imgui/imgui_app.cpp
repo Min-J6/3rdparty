@@ -21,8 +21,8 @@
 
 // 윈도우 크기
 std::string TITLE               = "DEMO";
-const float WINDOW_WIDTH        = 1280;
-const float WINDOW_HEIGHT       = 720;
+float WINDOW_WIDTH              = 1280;
+float WINDOW_HEIGHT             = 720;
 
 
 const ImVec4 CLEAR_COLOR        = ImVec4(0.1f, 0.1f, 0.1f, 0.7f);
@@ -73,8 +73,10 @@ void ImguiApp::show_imgui(std::function<void()> func) {
 
 
 
-void ImguiApp::start_background(const std::string& title) {
+void ImguiApp::start_background(const std::string& title, const ImVec2& size) {
     TITLE = title;
+    WINDOW_WIDTH = size.x;
+    WINDOW_HEIGHT = size.y;
 
     getInstance().startBackground();
 

@@ -21,7 +21,7 @@ public:
     static void show_imgui(std::function<void()> func);
 
     // 백그라운드 스레드에서 ImGui 앱 시작
-    static void start_background(const std::string& title);
+    static void start_background(const std::string& title, const ImVec2& size = ImVec2(1280, 720));
 
     // ImGui 앱 종료
     static void stop_background();
