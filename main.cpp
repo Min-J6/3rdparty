@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 
+
 // 매크로 구조체
 struct Macro {
     char name[64] = "";
