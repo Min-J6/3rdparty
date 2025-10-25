@@ -12,6 +12,7 @@ add_library(imgui
     imgui_draw.cpp
     imgui_widgets.cpp
     imgui_tables.cpp
+    imgui_demo.cpp
     ImCoolBar.cpp
     ImNotification.cpp
     backends/imgui_impl_glfw.cpp
