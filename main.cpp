@@ -214,7 +214,42 @@ class SerialMonitor {
 public:
     SerialMonitor(boost::asio::io_context& io) : serial(io), heartbeat_timer_(io) {
         available_ports = SerialPort::getAvailablePorts();
+
         load_macros_from_yaml();
+
+        serial.on_receive = [this](const std::vector<char>& data)
+        {
+            add_received_buffer(std::string(data.begin(), data.end()));
+        };
+
+        serial.on_error = [this](const std::string& error_msg)
+        {
+            add_received_buffer("[시스템] 에러: " + error_msg);
+        };
+
+        serial.on_connect = [this]()
+        {
+            add_received_buffer("[시스템] 연결됨: " + available_ports[selected_port_idx] + " (" + baud_rate_names[selected_baud_idx] + " baud)");
+        };
+
+        serial.on_disconnect = [this]()
+        {
+            if (heartbeat_enabled)
+            {
+                heartbeat_enabled = false;
+                heartbeat_timer_.cancel();
+            }
+
+            add_received_buffer("[시스템] 연결 해제됨");
+            add_received_buffer("---------------------------------");
+        };
+    }
+
+    ~SerialMonitor() {
+        save_macros_to_yaml();
+
+        if (serial.is_connected())
+            serial.disconnect();
     }
 
     void render() {
@@ -240,38 +275,54 @@ public:
         }
 
         // 매크로 설정 창
-        if (show_macro_window) {
-            ImGui::Begin("매크로 설정", &show_macro_window);
+        {
+            ImGui::Begin("매크로 설정");
 
-            if (ImGui::Button(" 저장 ")) {
+            ImGui::Text("매크로를 설정하면 단축키로 언제든 빠르게 보낼 수 있어요.");
+
+            ImGui::Dummy(ImVec2(0, 1));
+
+
+            // 상단 버튼들 (저장, 불러오기, 리셋)
+            if (ImGui::Button(ICON_MD_SAVE " 저장")) {
                 save_macros_to_yaml();
             }
-
             ImGui::SameLine();
-
-            if (ImGui::Button(" 불러오기 ")) {
+            if (ImGui::Button(ICON_MD_FOLDER_OPEN " 불러오기")) {
                 load_macros_from_yaml();
             }
+            ImGui::SameLine();
+            if (ImGui::Button(ICON_MD_REFRESH " 리셋")) {
+                reset_macros();
+            }
 
-            ImGui::Separator();
             ImGui::Dummy(ImVec2(0, 10));
 
+
+
+            // 매크로 목록
             for (int i = 0; i < macros.size(); i++) {
                 ImGui::PushID(i);
 
                 ImGui::Text("매크로 %d", i + 1);
                 ImGui::Separator();
 
-                ImGui::SetNextItemWidth(200);
-                ImGui::InputText("이름##name", macros[i].name, sizeof(macros[i].name));
-
-                ImGui::SetNextItemWidth(200);
-                ImGui::InputText("데이터##data", macros[i].data, sizeof(macros[i].data));
+                ImGui::SetNextItemWidth(150);
+                ImGui::Text("이름");
+                ImGui::SameLine(50);
+                ImGui::InputText("##이름", macros[i].name, sizeof(macros[i].name));
                 ImGui::SameLine();
-                ImGui::Checkbox("HEX##hex", &macros[i].is_hex);
 
-                ImGui::SetNextItemWidth(120);
-                ImGui::Combo("##line_ending", &macros[i].line_ending, line_ending_names, 4);
+                ImGui::Checkbox("HEX", &macros[i].is_hex);
+
+                ImGui::SetNextItemWidth(300);
+                ImGui::Text("데이터");
+                ImGui::SameLine(50);
+                ImGui::InputText("##데이터", macros[i].data, sizeof(macros[i].data));
+                ImGui::SameLine();
+
+                ImGui::SetNextItemWidth(75);
+                ImGui::Combo("##라인 엔딩", &macros[i].line_ending, line_ending_names, 4);
 
                 // 중복 확인
                 bool has_duplicate = false;
@@ -349,6 +400,7 @@ public:
 
             ImGui::SameLine();
 
+            // 시리얼 포트 리스트 갱신 버튼
             if (ImGui::Button(ICON_MD_SYNC)) {
                 available_ports = SerialPort::getAvailablePorts();
                 if (selected_port_idx >= available_ports.size()) {
@@ -374,6 +426,7 @@ public:
 
             ImGui::SameLine();
 
+            // 포트 연결/해제 버튼
             if (serial.is_connected()) {
                 if (ImGui::Button(ICON_MD_LINK_OFF " 연결 해제")) {
                     serial.disconnect();
@@ -383,17 +436,10 @@ public:
                         heartbeat_enabled = false;
                         heartbeat_timer_.cancel();
                     }
-
-                    // 버퍼 업데이트
-                    add_received_buffer("[시스템] 연결 해제됨");
                 }
             } else {
                 if (ImGui::Button(ICON_MD_LINK " 포트 연결 ") && !available_ports.empty()) {
-                    if (serial.connect(available_ports[selected_port_idx], baud_rates[selected_baud_idx])) {
-
-                        // 버퍼 업데이트
-                        add_received_buffer("[시스템] 연결됨: " + available_ports[selected_port_idx] + " (" + baud_rate_names[selected_baud_idx] + " baud)");
-                    }
+                    serial.connect(available_ports[selected_port_idx], baud_rates[selected_baud_idx]);
                 }
             }
 
@@ -403,8 +449,8 @@ public:
             ImGui::Dummy(ImVec2(0, 10));
 
             ImGui::Text("하트비트 설정");
-            ImGui::Separator();
 
+            // 하트비트 타이머 설정
             if (heartbeat_enabled) {
                 if (ImGui::Button(ICON_MD_ECG_HEART " 하트비트 중지")) {
                     heartbeat_enabled = false;
@@ -413,7 +459,8 @@ public:
                     // 버퍼 업데이트
                     add_received_buffer("[시스템] 하트비트 중지됨");
                 }
-            } else {
+            }
+            else {
                 if (ImGui::Button(ICON_MD_ECG_HEART " 하트비트 시작") && serial.is_connected()) {
                     heartbeat_enabled = true;
 
@@ -432,8 +479,8 @@ public:
             ImGui::InputText("##hb_data", heartbeat_buffer, sizeof(heartbeat_buffer));
             ImGui::SameLine();
 
-            ImGui::SetNextItemWidth(100);
-            ImGui::DragInt("간격(ms)##hb", &heartbeat_interval, 100, 100, 10000);
+            ImGui::SetNextItemWidth(58);
+            ImGui::DragInt("간격(ms)##hb", &heartbeat_interval, 100, 100, 5000);
 
             ImGui::SameLine();
             ImGui::SetNextItemWidth(120);
@@ -466,7 +513,6 @@ public:
 
 
 
-
             // 송수신 데이터 표시
             if (ImGui::BeginChild("ReceiveArea", ImVec2(0, -80), true, ImGuiWindowFlags_HorizontalScrollbar)) {
                 for (const auto& line : received_lines) {
@@ -489,6 +535,8 @@ public:
             ImGui::SetNextItemWidth(120);
             ImGui::Combo("##send_ending", &send_line_ending, line_ending_names, 4);
 
+
+            // 데이터 표시 창
             ImGui::SetNextItemWidth(-70);
             if (ImGui::InputText("##send", send_buffer, sizeof(send_buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
                 send_data(send_buffer, send_as_hex, send_line_ending);
@@ -497,6 +545,8 @@ public:
             }
             ImGui::SameLine();
 
+
+            // 송신 버튼
             if (ImGui::Button(ICON_MD_SEND "보내기") && serial.is_connected()) {
                 send_data(send_buffer, send_as_hex, send_line_ending);
             }
@@ -597,8 +647,7 @@ private:
                 std::vector<char> hb_data;
 
                 if (heartbeat_as_hex) {
-                    hb_data = hexString_to_bytes(heartbeat_buffer);
-                    std::cout << "hb_data: " << std::hex << std::string(hb_data.begin(), hb_data.end()) << std::endl;
+                    hb_data = hexString_to_bytes(std::string(heartbeat_buffer));
                 } else {
                     hb_data = std::vector<char>(heartbeat_buffer, heartbeat_buffer + strlen(heartbeat_buffer));
                 }
@@ -606,6 +655,7 @@ private:
                 if (heartbeat_line_ending == 1) hb_data.push_back('\n');
                 else if (heartbeat_line_ending == 2) hb_data.push_back('\r');
                 else if (heartbeat_line_ending == 3) { hb_data.push_back('\r'); hb_data.push_back('\n'); }
+
 
                 serial.send(hb_data);
 
@@ -715,6 +765,12 @@ private:
         file.close();
     }
 
+    // 매크로 리셋
+    void reset_macros() {
+        macros.clear();
+        macros.resize(10);
+    }
+
 
     std::vector<std::string> available_ports;
     int selected_port_idx = 0;
@@ -754,7 +810,6 @@ private:
 
     // 매크로 관련
     std::vector<Macro> macros = std::vector<Macro>(10);
-    bool show_macro_window = false;
     int detecting_macro_idx = -1; // 키 감지 중인 매크로 인덱스
     int duplicate_warning_macro = -1; // 중복 경고 표시할 매크로
     int duplicate_with_macro = -1; // 중복된 다른 매크로
@@ -772,56 +827,36 @@ private:
 int main(int, char**) {
     ImguiApp::start_background("시리얼 모니터", ImVec2(480, 720));
 
-
     boost::asio::io_context io_context;
     SerialMonitor sm(io_context);
 
+    // 1. work_guard를 io_thread 생성 전에 만듭니다.
     auto work_guard = boost::asio::make_work_guard(io_context);
 
-
-    std::thread io_thread([&io_context]()
-    {
+    // 2. io_context.run()을 실행할 스레드를 시작합니다.
+    std::thread io_thread([&io_context]() {
         io_context.run();
     });
 
-
-    // serial.on_receive = [&](const std::vector<char>& data) {
-    //     std::string line;
-    //
-    //     if (show_timestamp) {
-    //         line = "[" + get_timestamp() + "]: ";
-    //     }
-    //
-    //     if (receive_as_hex) {
-    //         line += bytes_to_hex(data);
-    //     } else {
-    //         line += std::string(data.begin(), data.end());
-    //     }
-    //
-    //     received_lines.push_back(line);
-    //
-    //     if (received_lines.size() > MAX_LINES) {
-    //         received_lines.pop_front();
-    //     }
-    //
-    //     // 버퍼 업데이트
-    //     update_received_buffer(received_lines, received_text_buffer, sizeof(received_text_buffer));
-    //     scroll_to_bottom = auto_scroll;
-    // };
-
-
+    // GUI 메인 루프
     while (ImguiApp::is_running()) {
-        ImguiApp::show_imgui([&](){
+        ImguiApp::show_imgui([&]() {
             sm.render();
         });
     }
 
     ImguiApp::stop_background();
 
+    // 3. GUI가 종료되면 work_guard를 리셋하여 io_context.run()이 반환되도록 합니다.
     work_guard.reset();
+
+    // 4. io_context를 정지시키고 스레드가 완전히 종료될 때까지 기다립니다.
     io_context.stop();
-    io_thread.join();
+    if (io_thread.joinable()) {
+        io_thread.join();
+    }
 
     return 0;
 }
+
 
