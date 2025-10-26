@@ -16,183 +16,91 @@
 #include <cctype>    // for isdigit
 
 
+
+
 class SerialPort {
 public:
-    SerialPort() : port(io_ctx), heartbeat_timer(io_ctx) {}
+    explicit SerialPort(boost::asio::io_context& io)
+        : ioContext_(io), serialPort_(io), readBuffer_(1024) {}
 
     ~SerialPort() {
         disconnect();
     }
 
-    // 콜백 함수 정의
     std::function<void(const std::vector<char>&)> on_receive;
     std::function<void()> on_disconnect;
     std::function<void(const std::string&)> on_error;
+    std::function<void()> on_connect;
 
+    bool connect(const std::string& portName, unsigned int baudRate) {
+        if (is_connected())
+            return true;
 
-    // -------------------------------------------------
-    // 연결
-    // -------------------------------------------------
+        try
+        {
+            serialPort_.open(portName);
+            serialPort_.set_option(boost::asio::serial_port_base::baud_rate(baudRate));
+            serialPort_.set_option(boost::asio::serial_port_base::character_size(8));
+            serialPort_.set_option(boost::asio::serial_port_base::stop_bits(boost::asio::serial_port_base::stop_bits::one));
+            serialPort_.set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
+            serialPort_.set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
+            do_read();
 
-    // 연결
-    bool connect(const std::string& port_path, int baud_rate) {
-        if (connected) disconnect();
+            if (on_connect)
+                on_connect();
 
-        boost::system::error_code ec;
-        port.open(port_path, ec);
-        if (ec) {
-            std::string error_msg = "시리얼 포트 연결 실패: " + ec.message();
-            std::cout <<  "[Error] [Serial Port] " << error_msg << std::endl;
-            if (on_error) {
-                on_error(error_msg); // 에러 콜백 호출
-            }
+            return true;
+        }
+
+        catch (std::exception& e)
+        {
+            std::cerr << "[Error] [Serial Port] 연결 실패: " << e.what() << std::endl;
+
+            if (on_error)
+                on_error(e.what());
+
             return false;
         }
-
-        port.set_option(boost::asio::serial_port_base::baud_rate(baud_rate));
-        port.set_option(boost::asio::serial_port_base::character_size(8));
-        port.set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
-        port.set_option(boost::asio::serial_port_base::stop_bits(boost::asio::serial_port_base::stop_bits::one));
-        port.set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
-
-        connected = true;
-        start_receive();
-
-        // io_thread가 없거나 종료된 경우에만 새로 시작
-        if (!io_thread.joinable()) {
-            io_thread = std::thread([this]() { io_ctx.run(); });
-        }
-
-        std::cout << "[Info ] [Serial Port] 시리얼 포트 연결: " << port_path << std::endl;
-
-        return true;
     }
 
-    // 연결 해제
     void disconnect() {
-        if (!connected) return;
+        if (!is_connected())
+            return;
 
-        connected = false;
-        disable_heartbeat();
+        boost::system::error_code ec;
 
-        // 포트 닫기
-        if (port.is_open()) {
-            boost::system::error_code ec;
-            port.close(ec);
-        }
+        serialPort_.cancel(ec);
+        serialPort_.close(ec);
 
-        // io_context 정지
-        io_ctx.stop();
-
-        // io_thread가 현재 쓰레드가 아닐 때만 join
-        if (io_thread.joinable()) {
-            if (io_thread.get_id() != std::this_thread::get_id()) {
-                io_thread.join();
-            } else {
-                // 현재 쓰레드가 io_thread인 경우 detach
-                io_thread.detach();
-            }
-        }
-
-        // 송신 큐 비우기
-        std::queue<std::vector<char>> empty_queue;
-        tx_queue.swap(empty_queue);
-
-        // io_context 재시작 준비 (중요!)
-        io_ctx.restart();
-
-        // 콜백 호출
-        if (on_disconnect) {
+        if (on_disconnect)
+        {
             on_disconnect();
         }
-
-        std::cout << "[Info ] [Serial Port] 연결 해제" << std::endl;
     }
 
-    // 연결 상태 확인
     bool is_connected() const {
-        return connected;
+        return serialPort_.is_open();
     }
 
-
-    // -------------------------------------------------
-    // 통신
-    // -------------------------------------------------
-
-    // 송신 바이트 배열
     void send(const std::vector<char>& data) {
-        if (!connected) return;
+        if (!is_connected()) return;
 
-        boost::asio::post(io_ctx, [this, data]() {
-            bool write_in_progress = !tx_queue.empty();
-            tx_queue.push(data);
+        boost::asio::post(ioContext_, [this, data]() {
+            bool write_in_progress = !writeQueue_.empty();
 
-            if (!write_in_progress) {
+            writeQueue_.push_back(data);
+
+            if (!write_in_progress)
+            {
                 do_write();
             }
         });
     }
 
-    // 송신 문자열
-    void send(const std::string& data) {
-        send(std::vector<char>(data.begin(), data.end()));
+    void send(const std::string& text) {
+        send(std::vector<char>(text.begin(), text.end()));
     }
 
-
-
-    // -------------------------------------------------
-    // 이벤트 콜백 등록
-    // -------------------------------------------------
-
-    // 수신 콜백 등록
-    void set_receive_callback(std::function<void(const std::vector<char>&)> callback) {
-        on_receive = callback;
-    }
-
-    // 연결 종료 콜백 등록
-    void set_disconnect_callback(std::function<void()> callback) {
-        on_disconnect = callback;
-    }
-
-    // 에러 콜백 등록
-    void set_error_callback(std::function<void(const std::string&)> callback) {
-        on_error = callback;
-    }
-
-
-    // -------------------------------------------------
-    // 하트비트
-    // -------------------------------------------------
-    void enable_heartbeat(const std::vector<char>& data, int interval_ms) {
-        boost::asio::post(io_ctx, [this, data, interval_ms]() {
-            hb_data = data;
-            hb_interval = interval_ms;
-            hb_enabled = true;
-            schedule_hb();
-        });
-    }
-
-    // 하트비트 활성화
-    void enable_heartbeat(const std::string& data, int interval_ms) {
-        enable_heartbeat(std::vector<char>(data.begin(), data.end()), interval_ms);
-    }
-
-    // 하트비트 비활성화
-    void disable_heartbeat() {
-        boost::asio::post(io_ctx, [this]() {
-            hb_enabled = false;
-            boost::system::error_code ec;
-            heartbeat_timer.cancel(ec);
-        });
-    }
-
-
-    // 하트비트 상태 확인
-    bool is_heartbeat_enabled() const {
-        return hb_enabled;
-    }
-
-    // 사용 가능한 포트 검색
     static std::vector<std::string> getAvailablePorts() {
         std::vector<std::string> ports;
 
@@ -232,98 +140,72 @@ public:
     }
 
 private:
-    // Boost.Asio 객체
-    boost::asio::io_context io_ctx;
-    boost::asio::serial_port port;
-    boost::asio::steady_timer heartbeat_timer;
-    std::thread io_thread;
+    void do_read() {
+        if (!is_connected()) return;
 
-    // 상태
-    std::atomic<bool> connected{false};
+        serialPort_.async_read_some(boost::asio::buffer(readBuffer_),
+            [this](const boost::system::error_code& ec, std::size_t bytesTransferred) {
 
-    // 송신 큐
-    std::queue<std::vector<char>> tx_queue;
+                if (bytesTransferred > 0)
+                {
+                    std::vector<char> data(readBuffer_.begin(), readBuffer_.begin() + bytesTransferred);
 
-    // 수신 버퍼
-    std::array<char, 1024> rx_buffer;
-
-    // 하트비트
-    std::atomic<bool> hb_enabled{false};
-    std::vector<char> hb_data;
-    int hb_interval;
-
-    // 수신 처리 (비동기)
-    void start_receive() {
-        port.async_read_some(boost::asio::buffer(rx_buffer),
-            [this](const boost::system::error_code& ec, std::size_t len) {
-                if (!ec && connected) {
-                    if (on_receive) {
-                        on_receive(std::vector<char>(rx_buffer.begin(), rx_buffer.begin() + len));
-                    }
-                    start_receive();
-                } else if (ec && connected) {
-                    std::string error_msg = "수신 에러: " + ec.message();
-                    std::cerr << "[Warn ] [Serial Port] " << error_msg << std::endl;
-                    if (on_error) {
-                        on_error(error_msg); // 에러 콜백 호출
+                    if (on_receive)
+                    {
+                        on_receive(data);
                     }
 
-                    // 별도 쓰레드에서 disconnect 호출 (데드락 방지)
-                    std::thread([this]() {
-                        disconnect();
-                        if (on_error) on_error("연결 끊김");
-                    }).detach();
+                    do_read();
+                }
+
+
+                if (ec == boost::asio::error::operation_aborted)
+                {
+                    // 정상 종료
+                }
+                else if (ec)
+                {
+                    std::cerr << "[Error] [Serial Port] 읽기 실패: " << ec.message() << std::endl;
+                    if (on_error)
+                    {
+                        on_error(ec.message());
+                    }
+
+                    disconnect(); // 에러 발생시 연결 해제
                 }
             });
     }
 
-    // 송신 처리 (비동기)
     void do_write() {
-        if (tx_queue.empty() || !connected) return;
+        if (!is_connected() || writeQueue_.empty()) return;
 
-        auto data_ptr = std::make_shared<std::vector<char>>(tx_queue.front());
+        boost::asio::async_write(serialPort_, boost::asio::buffer(writeQueue_.front()),
+            [this](const boost::system::error_code& ec, std::size_t /*bytesTransferred*/) {
+                if (!ec)
+                {
+                    writeQueue_.pop_front();
 
-        boost::asio::async_write(port, boost::asio::buffer(*data_ptr),
-            [this, data_ptr](const boost::system::error_code& ec, std::size_t) {
+                    if (!writeQueue_.empty())
+                    {
+                        do_write();
+                    }
+                }
+
                 if (ec) {
-                    std::string error_msg = "송신 에러: " + ec.message();
-                    std::cerr << "[Error] [Serial Port] " << error_msg << std::endl;
-                    if (on_error) {
-                        on_error(error_msg); // 에러 콜백 호출
+                    std::cerr << "[Error] [Serial Port] 쓰기 실패: " << ec.message() << std::endl;
+
+                    if (on_error)
+                    {
+                        on_error(ec.message());
                     }
 
-                    if (ec == boost::system::errc::io_error || ec == boost::asio::error::operation_aborted) {
-                        // 별도 쓰레드에서 disconnect 호출 (데드락 방지)
-                        std::thread([this]() {
-                            disconnect();
-                            if (on_error) on_error("연결 끊김");
-                        }).detach();
-                        return;
-                    }
-                }
-
-
-                if (!tx_queue.empty()) {
-                    tx_queue.pop();
-                }
-
-                if (!tx_queue.empty() && connected) {
-                    do_write();
+                    disconnect(); // 에러 발생시 연결 해제
                 }
             });
     }
 
-
-    // 하트비트 스케줄링 (비동기)
-    void schedule_hb() {
-        if (!hb_enabled || !connected) return;
-
-        heartbeat_timer.expires_after(std::chrono::milliseconds(hb_interval));
-        heartbeat_timer.async_wait([this](const boost::system::error_code& ec) {
-            if (!ec && hb_enabled && connected) {
-                send(hb_data);
-                schedule_hb();
-            }
-        });
-    }
+    boost::asio::io_context& ioContext_;
+    boost::asio::serial_port serialPort_;
+    std::vector<char> readBuffer_;
+    std::deque<std::vector<char>> writeQueue_;
 };
