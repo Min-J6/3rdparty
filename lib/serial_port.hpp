@@ -124,12 +124,12 @@ public:
         scan_dir("/dev", dev_prefixes, 3);
 
         // /dev/pts 검색 (숫자만)
-        DIR* pts_dir = opendir("/dev/pts");
+        DIR* pts_dir = opendir("/dev");
         if (pts_dir) {
             struct dirent* entry;
             while ((entry = readdir(pts_dir))) {
                 if (isdigit(entry->d_name[0])) {
-                    ports.push_back(std::string("/dev/pts/") + entry->d_name);
+                    ports.push_back(std::string("/dev") + entry->d_name);
                 }
             }
             closedir(pts_dir);
