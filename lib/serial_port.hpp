@@ -30,6 +30,7 @@ public:
     std::function<void(const std::vector<char>&)> on_receive;
     std::function<void()> on_disconnect;
     std::function<void(const std::string&)> on_error;
+    std::function<void()> on_connect;
 
     bool connect(const std::string& portName, unsigned int baudRate) {
         if (is_connected())
@@ -44,6 +45,9 @@ public:
             serialPort_.set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
             serialPort_.set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
             do_read();
+
+            if (on_connect)
+                on_connect();
 
             return true;
         }
@@ -138,10 +142,11 @@ public:
 private:
     void do_read() {
         if (!is_connected()) return;
+
         serialPort_.async_read_some(boost::asio::buffer(readBuffer_),
             [this](const boost::system::error_code& ec, std::size_t bytesTransferred) {
 
-                if (!ec && bytesTransferred > 0)
+                if (bytesTransferred > 0)
                 {
                     std::vector<char> data(readBuffer_.begin(), readBuffer_.begin() + bytesTransferred);
 
@@ -152,7 +157,6 @@ private:
 
                     do_read();
                 }
-
 
 
                 if (ec == boost::asio::error::operation_aborted)
