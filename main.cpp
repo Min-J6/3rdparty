@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 
+#include <boost/asio.hpp>
 
 // 매크로 구조체
 struct Macro {
@@ -161,94 +162,9 @@ static std::vector<HotkeyDef> available_hotkeys = {
     {"Tab", ImGuiKey_Tab, false, false, false},
 };
 
-// YAML 저장/불러오기 함수 (간단한 구현)
-void save_macros_to_yaml(const std::vector<Macro>& macros, const std::string& filename) {
-    std::ofstream file(filename);
-    if (!file.is_open()) return;
-
-    file << "macros:\n";
-    for (size_t i = 0; i < macros.size(); i++) {
-        const auto& macro = macros[i];
-        file << "  - index: " << i << "\n";
-        file << "    name: \"" << macro.name << "\"\n";
-        file << "    data: \"" << macro.data << "\"\n";
-        file << "    is_hex: " << (macro.is_hex ? "true" : "false") << "\n";
-        file << "    line_ending: " << macro.line_ending << "\n";
-        file << "    hotkey: " << macro.hotkey << "\n";
-    }
-    file.close();
-}
-
-void load_macros_from_yaml(std::vector<Macro>& macros, const std::string& filename) {
-    std::ifstream file(filename);
-    if (!file.is_open()) return;
-
-    std::string line;
-    int current_index = -1;
-    Macro temp_macro;
-
-    while (std::getline(file, line)) {
-        // 공백 제거
-        size_t start = line.find_first_not_of(" \t");
-        if (start == std::string::npos) continue;
-        line = line.substr(start);
-
-        if (line.find("- index:") == 0) {
-            // 새 매크로 시작
-            if (current_index >= 0 && current_index < macros.size()) {
-                macros[current_index] = temp_macro;
-            }
-            current_index = std::stoi(line.substr(8));
-            temp_macro = Macro();
-        } else if (line.find("name:") == 0) {
-            size_t start_quote = line.find('"');
-            size_t end_quote = line.rfind('"');
-            if (start_quote != std::string::npos && end_quote != std::string::npos && start_quote < end_quote) {
-                std::string name = line.substr(start_quote + 1, end_quote - start_quote - 1);
-                strncpy(temp_macro.name, name.c_str(), sizeof(temp_macro.name) - 1);
-            }
-        } else if (line.find("data:") == 0) {
-            size_t start_quote = line.find('"');
-            size_t end_quote = line.rfind('"');
-            if (start_quote != std::string::npos && end_quote != std::string::npos && start_quote < end_quote) {
-                std::string data = line.substr(start_quote + 1, end_quote - start_quote - 1);
-                strncpy(temp_macro.data, data.c_str(), sizeof(temp_macro.data) - 1);
-            }
-        } else if (line.find("is_hex:") == 0) {
-            temp_macro.is_hex = (line.find("true") != std::string::npos);
-        } else if (line.find("line_ending:") == 0) {
-            temp_macro.line_ending = std::stoi(line.substr(12));
-        } else if (line.find("hotkey:") == 0) {
-            temp_macro.hotkey = std::stoi(line.substr(7));
-        }
-    }
-
-    // 마지막 매크로 저장
-    if (current_index >= 0 && current_index < macros.size()) {
-        macros[current_index] = temp_macro;
-    }
-
-    file.close();
-}
-
-void reset_macros(std::vector<Macro>& macros) {
-    for (auto& macro : macros) {
-        macro = Macro();
-    }
-}
-
-// 헬퍼 함수: 버퍼 업데이트
-void update_received_buffer(const std::deque<std::string>& received_lines, char* buffer, size_t buffer_size) {
-    std::string temp;
-    for (const auto& l : received_lines) {
-        temp += l + "\n";
-    }
-    strncpy(buffer, temp.c_str(), buffer_size - 1);
-    buffer[buffer_size - 1] = '\0';
-}
 
 // 헬퍼 함수: HEX 문자열을 바이트 배열로 변환
-std::vector<char> hex_to_bytes(const std::string& hex) {
+std::vector<char> hexString_to_bytes(const std::string& hex) {
     std::vector<char> bytes;
     std::string hex_clean;
 
@@ -269,7 +185,7 @@ std::vector<char> hex_to_bytes(const std::string& hex) {
 }
 
 // 헬퍼 함수: 바이트 배열을 HEX 문자열로 변환
-std::string bytes_to_hex(const std::vector<char>& bytes) {
+std::string bytes_to_hexString(const std::vector<char>& bytes) {
     std::stringstream ss;
     for (unsigned char byte : bytes) {
         ss << std::hex << std::setw(2) << std::setfill('0') << (int)byte << " ";
@@ -289,497 +205,622 @@ std::string get_timestamp() {
     return ss.str();
 }
 
-// 헬퍼 함수: 데이터 전송
-void send_data(SerialPort& serial, const std::string& data_str, bool is_hex, int line_ending) {
-    if (!serial.is_connected()) return;
 
-    std::vector<char> data;
 
-    if (is_hex) {
-        data = hex_to_bytes(data_str);
-    } else {
-        data = std::vector<char>(data_str.begin(), data_str.end());
+
+
+
+class SerialMonitor {
+public:
+    SerialMonitor(boost::asio::io_context& io) : serial(io), heartbeat_timer_(io) {
+        available_ports = SerialPort::getAvailablePorts();
+        load_macros_from_yaml();
     }
 
-    if (line_ending == 1) data.push_back('\n');
-    else if (line_ending == 2) data.push_back('\r');
-    else if (line_ending == 3) { data.push_back('\r'); data.push_back('\n'); }
+    void render() {
+        // 매크로 단축키 처리 (키 감지 모드가 아닐 때만)
+        if (detecting_macro_idx == -1) {
+            for (int i = 0; i < macros.size(); i++) {
+                if (macros[i].hotkey > 0 && macros[i].hotkey < available_hotkeys.size()) {
+                    const auto& hotkey = available_hotkeys[macros[i].hotkey];
+                    if (is_hotkey_pressed(hotkey)) {
+                        send_data(macros[i].data, macros[i].is_hex, macros[i].line_ending);
+                    }
+                }
+            }
+        }
 
-    serial.send(data);
-}
+        // 키 감지 모드일 때 키 입력 감지
+        if (detecting_macro_idx != -1) {
+            int pressed_key = detect_pressed_key();
+            if (pressed_key > 0) {
+                macros[detecting_macro_idx].hotkey = pressed_key;
+                detecting_macro_idx = -1;
+            }
+        }
 
-// 헬퍼 함수: 단축키 체크
-bool is_hotkey_pressed(const HotkeyDef& hotkey) {
-    if (hotkey.key == ImGuiKey_None) return false;
+        // 매크로 설정 창
+        if (show_macro_window) {
+            ImGui::Begin("매크로 설정", &show_macro_window);
 
-    ImGuiIO& io = ImGui::GetIO();
+            if (ImGui::Button(" 저장 ")) {
+                save_macros_to_yaml();
+            }
 
-    bool ctrl_match = hotkey.needs_ctrl ? io.KeyCtrl : !io.KeyCtrl;
-    bool shift_match = hotkey.needs_shift ? io.KeyShift : !io.KeyShift;
-    bool alt_match = hotkey.needs_alt ? io.KeyAlt : !io.KeyAlt;
+            ImGui::SameLine();
 
-    if (io.WantTextInput) return false;
+            if (ImGui::Button(" 불러오기 ")) {
+                load_macros_from_yaml();
+            }
 
-    return ImGui::IsKeyPressed(hotkey.key) && ctrl_match && shift_match && alt_match;
-}
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, 10));
 
-// 헬퍼 함수: 눌린 키 감지
-int detect_pressed_key() {
-    ImGuiIO& io = ImGui::GetIO();
+            for (int i = 0; i < macros.size(); i++) {
+                ImGui::PushID(i);
 
-    // 모든 단축키를 순회하며 눌린 키 찾기
-    for (int i = 1; i < available_hotkeys.size(); i++) {
-        const auto& hotkey = available_hotkeys[i];
+                ImGui::Text("매크로 %d", i + 1);
+                ImGui::Separator();
 
-        if (hotkey.key == ImGuiKey_None) continue;
+                ImGui::SetNextItemWidth(200);
+                ImGui::InputText("이름##name", macros[i].name, sizeof(macros[i].name));
+
+                ImGui::SetNextItemWidth(200);
+                ImGui::InputText("데이터##data", macros[i].data, sizeof(macros[i].data));
+                ImGui::SameLine();
+                ImGui::Checkbox("HEX##hex", &macros[i].is_hex);
+
+                ImGui::SetNextItemWidth(120);
+                ImGui::Combo("##line_ending", &macros[i].line_ending, line_ending_names, 4);
+
+                // 중복 확인
+                bool has_duplicate = false;
+                int dup_idx = -1;
+                if (macros[i].hotkey > 0) {
+                    for (int j = 0; j < macros.size(); j++) {
+                        if (i != j && macros[j].hotkey == macros[i].hotkey) {
+                            has_duplicate = true;
+                            dup_idx = j;
+                            break;
+                        }
+                    }
+                }
+
+                if (has_duplicate) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
+                    ImGui::Text("단축키: %s (매크로 %d와 중복)",
+                               available_hotkeys[macros[i].hotkey].name, dup_idx + 1);
+                    ImGui::PopStyleColor();
+                } else {
+                    ImGui::Text("단축키: %s", available_hotkeys[macros[i].hotkey].name);
+                }
+                ImGui::SameLine();
+
+                if (detecting_macro_idx == i) {
+                    if (ImGui::Button( " 취소 ")) {
+                        detecting_macro_idx = -1;
+                    }
+                } else {
+                    if (ImGui::Button( " 키 등록 ")) {
+                        detecting_macro_idx = i;
+                    }
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button( " 해제 ")) {
+                    macros[i].hotkey = 0;
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button( " 보내기 ")) {
+                    send_data(macros[i].data, macros[i].is_hex, macros[i].line_ending);
+                }
+
+                ImGui::Spacing();
+                ImGui::PopID();
+
+                ImGui::Dummy(ImVec2(0, 10));
+            }
+
+            ImGui::End();
+        }
+
+
+        // 시리얼 모니터 창
+        {
+            ImGui::Begin("시리얼 모니터", NULL);
+
+            ImGui::Text("연결 설정");
+
+            ImGui::SetNextItemWidth(200);
+
+            if (ImGui::BeginCombo("##port", available_ports.empty() ? "포트 없음" : available_ports[selected_port_idx].c_str())) {
+                for (int i = 0; i < available_ports.size(); i++) {
+                    bool is_selected = (selected_port_idx == i);
+                    if (ImGui::Selectable(available_ports[i].c_str(), is_selected)) {
+                        selected_port_idx = i;
+                    }
+                    if (is_selected) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            ImGui::SameLine();
+
+            if (ImGui::Button(ICON_MD_SYNC)) {
+                available_ports = SerialPort::getAvailablePorts();
+                if (selected_port_idx >= available_ports.size()) {
+                    selected_port_idx = 0;
+                }
+            }
+
+            ImGui::SameLine();
+
+            ImGui::SetNextItemWidth(120);
+            if (ImGui::BeginCombo("##baud", baud_rate_names[selected_baud_idx])) {
+                for (int i = 0; i < 5; i++) {
+                    bool is_selected = (selected_baud_idx == i);
+                    if (ImGui::Selectable(baud_rate_names[i], is_selected)) {
+                        selected_baud_idx = i;
+                    }
+                    if (is_selected) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            ImGui::SameLine();
+
+            if (serial.is_connected()) {
+                if (ImGui::Button(ICON_MD_LINK_OFF " 연결 해제")) {
+                    serial.disconnect();
+
+                    // 하트비트 중지
+                    if (heartbeat_enabled) {
+                        heartbeat_enabled = false;
+                        heartbeat_timer_.cancel();
+                    }
+
+                    // 버퍼 업데이트
+                    add_received_buffer("[시스템] 연결 해제됨");
+                }
+            } else {
+                if (ImGui::Button(ICON_MD_LINK " 포트 연결 ") && !available_ports.empty()) {
+                    if (serial.connect(available_ports[selected_port_idx], baud_rates[selected_baud_idx])) {
+
+                        // 버퍼 업데이트
+                        add_received_buffer("[시스템] 연결됨: " + available_ports[selected_port_idx] + " (" + baud_rate_names[selected_baud_idx] + " baud)");
+                    }
+                }
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+
+            ImGui::Dummy(ImVec2(0, 10));
+
+            ImGui::Text("하트비트 설정");
+            ImGui::Separator();
+
+            if (heartbeat_enabled) {
+                if (ImGui::Button(ICON_MD_ECG_HEART " 하트비트 중지")) {
+                    heartbeat_enabled = false;
+                    heartbeat_timer_.cancel();
+
+                    // 버퍼 업데이트
+                    add_received_buffer("[시스템] 하트비트 중지됨");
+                }
+            } else {
+                if (ImGui::Button(ICON_MD_ECG_HEART " 하트비트 시작") && serial.is_connected()) {
+                    heartbeat_enabled = true;
+
+                    // 버퍼 업데이트
+                    add_received_buffer("[시스템] 하트비트 시작됨 (간격: " + std::to_string(heartbeat_interval) + "ms)");
+
+                    // 하트비트 타이머 시작
+                    start_heartbeat_timer();
+                }
+            }
+
+            ImGui::SameLine();
+            ImGui::Checkbox("HEX##hb", &heartbeat_as_hex);
+
+            ImGui::SetNextItemWidth(200);
+            ImGui::InputText("##hb_data", heartbeat_buffer, sizeof(heartbeat_buffer));
+            ImGui::SameLine();
+
+            ImGui::SetNextItemWidth(100);
+            ImGui::DragInt("간격(ms)##hb", &heartbeat_interval, 100, 100, 10000);
+
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120);
+            ImGui::Combo("##hb_ending", &heartbeat_line_ending, line_ending_names, 4);
+
+
+            ImGui::Spacing();
+            ImGui::Separator();
+
+            ImGui::Dummy(ImVec2(0, 10));
+
+            ImGui::Text("수신 데이터");
+            ImGui::SameLine();
+            if (ImGui::Button(ICON_MD_DELETE " 지우기")) {
+                received_lines.clear();
+                received_text_buffer[0] = '\0';
+            }
+
+            ImGui::SameLine(0, 15);
+
+            ImGui::Checkbox("HEX##recv", &receive_as_hex);
+
+            ImGui::SameLine(0, 15);
+
+            ImGui::Checkbox("자동 스크롤", &auto_scroll);
+
+            ImGui::SameLine(0, 15);
+
+            ImGui::Checkbox("타임 스탬프", &show_timestamp);
+
+
+
+
+            // 송수신 데이터 표시
+            if (ImGui::BeginChild("ReceiveArea", ImVec2(0, -80), true, ImGuiWindowFlags_HorizontalScrollbar)) {
+                for (const auto& line : received_lines) {
+                    ImGui::TextUnformatted(line.c_str());
+                }
+
+                // 자동 스크롤 처리
+                if (scroll_to_bottom || (auto_scroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()))
+                    ImGui::SetScrollHereY(1.0f);
+                scroll_to_bottom = false;
+            }
+            ImGui::EndChild();
+
+            ImGui::Dummy(ImVec2(0, 10));
+
+            ImGui::Text("송신 데이터");
+            ImGui::SameLine();
+            ImGui::Checkbox("HEX##send", &send_as_hex);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120);
+            ImGui::Combo("##send_ending", &send_line_ending, line_ending_names, 4);
+
+            ImGui::SetNextItemWidth(-70);
+            if (ImGui::InputText("##send", send_buffer, sizeof(send_buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                send_data(send_buffer, send_as_hex, send_line_ending);
+                send_buffer[0] = '\0';
+                ImGui::SetKeyboardFocusHere(-1);
+            }
+            ImGui::SameLine();
+
+            if (ImGui::Button(ICON_MD_SEND "보내기") && serial.is_connected()) {
+                send_data(send_buffer, send_as_hex, send_line_ending);
+            }
+
+            ImGui::End();
+        }
+    }
+
+private:
+    // 시리얼 포트로 데이터 전송
+    void send_data(const std::string& data_str, bool is_hex, int line_ending) {
+        if (!serial.is_connected()) return;
+
+
+        std::vector<char> data;
+
+
+        if (is_hex) {
+            data = hexString_to_bytes(data_str);
+        } else {
+            data = std::vector<char>(data_str.begin(), data_str.end());
+        }
+
+
+        if (line_ending == 1) data.push_back('\n');
+        else if (line_ending == 2) data.push_back('\r');
+        else if (line_ending == 3) { data.push_back('\r'); data.push_back('\n'); }
+
+
+        serial.send(data);
+
+
+        if (data.size() > 0)
+            add_received_buffer(data_str);
+    }
+
+    // Receive buffer 업데이트
+    void add_received_buffer(const std::string& line_str) {
+        received_lines.push_back(line_str);
+        size_t buffer_size = sizeof(received_text_buffer);
+
+
+        std::string temp;
+        for (const auto& l : received_lines) {
+            temp += l + "\n";
+        }
+
+
+        strncpy(received_text_buffer, temp.c_str(), buffer_size - 1);
+        received_text_buffer[buffer_size - 1] = '\0';
+    }
+
+    // 눌린 단축키 확인 (키 감지 모드)
+    int detect_pressed_key() {
+        ImGuiIO& io = ImGui::GetIO();
+
+        // 모든 단축키를 순회하며 눌린 키 찾기
+        for (int i = 1; i < available_hotkeys.size(); i++) {
+            const auto& hotkey = available_hotkeys[i];
+
+            if (hotkey.key == ImGuiKey_None) continue;
+
+            bool ctrl_match = hotkey.needs_ctrl ? io.KeyCtrl : !io.KeyCtrl;
+            bool shift_match = hotkey.needs_shift ? io.KeyShift : !io.KeyShift;
+            bool alt_match = hotkey.needs_alt ? io.KeyAlt : !io.KeyAlt;
+
+            if (ImGui::IsKeyPressed(hotkey.key) && ctrl_match && shift_match && alt_match) {
+                return i;
+            }
+        }
+
+        return 0;
+    }
+
+    // 단축키가 눌렸는지 확인
+    bool is_hotkey_pressed(const HotkeyDef& hotkey) {
+        if (hotkey.key == ImGuiKey_None) return false;
+
+        ImGuiIO& io = ImGui::GetIO();
 
         bool ctrl_match = hotkey.needs_ctrl ? io.KeyCtrl : !io.KeyCtrl;
         bool shift_match = hotkey.needs_shift ? io.KeyShift : !io.KeyShift;
         bool alt_match = hotkey.needs_alt ? io.KeyAlt : !io.KeyAlt;
 
-        if (ImGui::IsKeyPressed(hotkey.key) && ctrl_match && shift_match && alt_match) {
-            return i;
-        }
+        if (io.WantTextInput) return false;
+
+        return ImGui::IsKeyPressed(hotkey.key) && ctrl_match && shift_match && alt_match;
     }
 
-    return 0;
-}
+    // 하트비트 타이머 시작
+    void start_heartbeat_timer() {
+        if (!heartbeat_enabled || !serial.is_connected()) return;
+
+        heartbeat_timer_.expires_after(std::chrono::milliseconds(heartbeat_interval));
+        heartbeat_timer_.async_wait([this](const boost::system::error_code& ec) {
+            if (!ec && heartbeat_enabled && serial.is_connected()) {
+                // 하트비트 데이터 전송
+                std::vector<char> hb_data;
+
+                if (heartbeat_as_hex) {
+                    hb_data = hexString_to_bytes(heartbeat_buffer);
+                    std::cout << "hb_data: " << std::hex << std::string(hb_data.begin(), hb_data.end()) << std::endl;
+                } else {
+                    hb_data = std::vector<char>(heartbeat_buffer, heartbeat_buffer + strlen(heartbeat_buffer));
+                }
+
+                if (heartbeat_line_ending == 1) hb_data.push_back('\n');
+                else if (heartbeat_line_ending == 2) hb_data.push_back('\r');
+                else if (heartbeat_line_ending == 3) { hb_data.push_back('\r'); hb_data.push_back('\n'); }
+
+                serial.send(hb_data);
+
+                // 다음 하트비트 예약
+                start_heartbeat_timer();
+            }
+        });
+    }
+
+    // 매크로 설정 파일 불러오기
+    void load_macros_from_yaml() {
+         std::ifstream file(macro_config_file);
+        if (!file.is_open()) return;
+
+        std::string line;
+        int current_index = -1;
+        Macro temp_macro;
+
+        while (std::getline(file, line)) {
+            // 공백 제거
+            size_t start = line.find_first_not_of(" \t");
+            if (start == std::string::npos) continue;
+            line = line.substr(start);
+
+            if (line.find("- index:") == 0) {
+                // 새 매크로 시작
+                if (current_index >= 0 && current_index < macros.size()) {
+                    macros[current_index] = temp_macro;
+                }
+
+                // index 파싱
+                size_t pos = line.find(":");
+                if (pos != std::string::npos) {
+                    current_index = std::stoi(line.substr(pos + 1));
+                    temp_macro = Macro(); // 초기화
+                }
+            }
+            else if (line.find("name:") == 0) {
+                size_t pos = line.find(":");
+                if (pos != std::string::npos) {
+                    std::string value = line.substr(pos + 1);
+                    // 앞뒤 공백 제거
+                    size_t first = value.find_first_not_of(" \t\"");
+                    size_t last = value.find_last_not_of(" \t\"");
+                    if (first != std::string::npos && last != std::string::npos) {
+                        value = value.substr(first, last - first + 1);
+                        strncpy(temp_macro.name, value.c_str(), sizeof(temp_macro.name) - 1);
+                    }
+                }
+            }
+            else if (line.find("data:") == 0) {
+                size_t pos = line.find(":");
+                if (pos != std::string::npos) {
+                    std::string value = line.substr(pos + 1);
+                    size_t first = value.find_first_not_of(" \t\"");
+                    size_t last = value.find_last_not_of(" \t\"");
+                    if (first != std::string::npos && last != std::string::npos) {
+                        value = value.substr(first, last - first + 1);
+                        strncpy(temp_macro.data, value.c_str(), sizeof(temp_macro.data) - 1);
+                    }
+                }
+            }
+            else if (line.find("is_hex:") == 0) {
+                size_t pos = line.find(":");
+                if (pos != std::string::npos) {
+                    std::string value = line.substr(pos + 1);
+                    temp_macro.is_hex = (value.find("true") != std::string::npos);
+                }
+            }
+            else if (line.find("line_ending:") == 0) {
+                size_t pos = line.find(":");
+                if (pos != std::string::npos) {
+                    temp_macro.line_ending = std::stoi(line.substr(pos + 1));
+                }
+            }
+            else if (line.find("hotkey:") == 0) {
+                size_t pos = line.find(":");
+                if (pos != std::string::npos) {
+                    temp_macro.hotkey = std::stoi(line.substr(pos + 1));
+                }
+            }
+        }
+
+        // 마지막 매크로 저장
+        if (current_index >= 0 && current_index < macros.size()) {
+            macros[current_index] = temp_macro;
+        }
+
+        file.close();
+    }
+
+    // 매크로 설정 파일 저장
+    void save_macros_to_yaml() {
+        std::ofstream file(macro_config_file);
+        if (!file.is_open()) return;
+
+        file << "macros:\n";
+        for (int i = 0; i < macros.size(); i++) {
+            file << "  - index: " << i << "\n";
+            file << "    name: \"" << macros[i].name << "\"\n";
+            file << "    data: \"" << macros[i].data << "\"\n";
+            file << "    is_hex: " << (macros[i].is_hex ? "true" : "false") << "\n";
+            file << "    line_ending: " << macros[i].line_ending << "\n";
+            file << "    hotkey: " << macros[i].hotkey << "\n";
+        }
+
+        file.close();
+    }
+
+
+    std::vector<std::string> available_ports;
+    int selected_port_idx = 0;
+    int baud_rates[5] = {9600, 19200, 38400, 57600, 115200};
+    const char* baud_rate_names[5] = {"9600", "19200", "38400", "57600", "115200"};
+    int selected_baud_idx = 4;
+
+    std::deque<std::string> received_lines;
+    const int MAX_LINES = 1000;
+
+    // 수신 데이터를 문자열로 저장하기 위한 버퍼 (최대 100KB)
+    char received_text_buffer[1024 * 100] = "";
+
+
+    // 송신 데이터 관련
+    char send_buffer[256] = "";
+    bool send_as_hex = false;
+    int send_line_ending = 0;
+    const char* line_ending_names[4] = {"없음", "LF", "CR", "CR+LF"};
+
+
+    // 수신 데이터 관련
+    bool receive_as_hex = false;
+    bool auto_scroll = true;
+    bool scroll_to_bottom = false;
+    bool show_timestamp = false;
+
+
+    // 하트 비트 관련
+    char heartbeat_buffer[256] = "PING";
+    bool heartbeat_as_hex = false;
+    int heartbeat_interval = 1000;
+    int heartbeat_line_ending = 0;
+    bool heartbeat_enabled = false;
+    boost::asio::steady_timer heartbeat_timer_;
+
+
+    // 매크로 관련
+    std::vector<Macro> macros = std::vector<Macro>(10);
+    bool show_macro_window = false;
+    int detecting_macro_idx = -1; // 키 감지 중인 매크로 인덱스
+    int duplicate_warning_macro = -1; // 중복 경고 표시할 매크로
+    int duplicate_with_macro = -1; // 중복된 다른 매크로
+    const std::string macro_config_file = "macros.yaml";
+
+
+    SerialPort serial;
+};
+
+
+
+
+
 
 int main(int, char**) {
     ImguiApp::start_background("시리얼 모니터", ImVec2(480, 720));
 
-    static SerialPort serial;
-    static std::vector<std::string> available_ports;
-    static int selected_port_idx = 0;
-    static int baud_rates[] = {9600, 19200, 38400, 57600, 115200};
-    static const char* baud_rate_names[] = {"9600", "19200", "38400", "57600", "115200"};
-    static int selected_baud_idx = 4;
 
-    static std::deque<std::string> received_lines;
-    static const int MAX_LINES = 1000;
+    boost::asio::io_context io_context;
+    SerialMonitor sm(io_context);
 
-    // 수신 데이터를 문자열로 저장하기 위한 버퍼 (최대 100KB)
-    static char received_text_buffer[1024 * 100] = "";
+    auto work_guard = boost::asio::make_work_guard(io_context);
 
-    static char send_buffer[256] = "";
-    static bool send_as_hex = false;
-    static int send_line_ending = 0;
-    static const char* line_ending_names[] = {"없음", "LF", "CR", "CR+LF"};
 
-    static bool receive_as_hex = false;
-    static bool auto_scroll = true;
-    static bool scroll_to_bottom = false;
-    static bool show_timestamp = false;
+    std::thread io_thread([&io_context]()
+    {
+        io_context.run();
+    });
 
-    static char heartbeat_buffer[256] = "PING";
-    static bool heartbeat_as_hex = false;
-    static int heartbeat_interval = 1000;
-    static int heartbeat_line_ending = 0;
 
-    static std::vector<Macro> macros(10);
-    static bool show_macro_window = false;
-    static int detecting_macro_idx = -1; // 키 감지 중인 매크로 인덱스
-    static int duplicate_warning_macro = -1; // 중복 경고 표시할 매크로
-    static int duplicate_with_macro = -1; // 중복된 다른 매크로
+    // serial.on_receive = [&](const std::vector<char>& data) {
+    //     std::string line;
+    //
+    //     if (show_timestamp) {
+    //         line = "[" + get_timestamp() + "]: ";
+    //     }
+    //
+    //     if (receive_as_hex) {
+    //         line += bytes_to_hex(data);
+    //     } else {
+    //         line += std::string(data.begin(), data.end());
+    //     }
+    //
+    //     received_lines.push_back(line);
+    //
+    //     if (received_lines.size() > MAX_LINES) {
+    //         received_lines.pop_front();
+    //     }
+    //
+    //     // 버퍼 업데이트
+    //     update_received_buffer(received_lines, received_text_buffer, sizeof(received_text_buffer));
+    //     scroll_to_bottom = auto_scroll;
+    // };
 
-    // 매크로 YAML 파일 경로
-    static const std::string macro_config_file = "macros.yaml";
-
-    // 프로그램 시작 시 매크로 불러오기
-    static bool macros_loaded = false;
-    if (!macros_loaded) {
-        load_macros_from_yaml(macros, macro_config_file);
-        macros_loaded = true;
-    }
-
-    available_ports = SerialPort::getAvailablePorts();
-
-    serial.on_receive = [&](const std::vector<char>& data) {
-        std::string line;
-
-        if (show_timestamp) {
-            line = "[" + get_timestamp() + "]: ";
-        }
-
-        if (receive_as_hex) {
-            line += bytes_to_hex(data);
-        } else {
-            line += std::string(data.begin(), data.end());
-        }
-
-        received_lines.push_back(line);
-
-        if (received_lines.size() > MAX_LINES) {
-            received_lines.pop_front();
-        }
-
-        // 버퍼 업데이트
-        update_received_buffer(received_lines, received_text_buffer, sizeof(received_text_buffer));
-        scroll_to_bottom = auto_scroll;
-    };
-
-    // 오류 콜백 설정
-    serial.on_error = [&](const std::string& error_msg) {
-        std::string line = "[오류] " + error_msg;
-        if (show_timestamp) {
-            line = "[" + get_timestamp() + "]: " + line;
-        }
-        received_lines.push_back(line);
-        if (received_lines.size() > MAX_LINES) {
-            received_lines.pop_front();
-        }
-
-        // 버퍼 업데이트
-        update_received_buffer(received_lines, received_text_buffer, sizeof(received_text_buffer));
-        scroll_to_bottom = auto_scroll;
-    };
 
     while (ImguiApp::is_running()) {
         ImguiApp::show_imgui([&](){
-            // 키 감지 모드가 아닐 때만 매크로 단축키 처리
-            if (detecting_macro_idx == -1) {
-                for (int i = 0; i < macros.size(); i++) {
-                    if (macros[i].hotkey > 0 && macros[i].hotkey < available_hotkeys.size()) {
-                        if (is_hotkey_pressed(available_hotkeys[macros[i].hotkey])) {
-                            send_data(serial, macros[i].data, macros[i].is_hex, macros[i].line_ending);
-
-                            // 버퍼 업데이트
-                            update_received_buffer(received_lines, received_text_buffer, sizeof(received_text_buffer));
-                        }
-                    }
-                }
-            }
-
-
-              // 매크로 설정 창
-            {
-                ImGui::Begin("매크로 설정");
-
-                ImGui::Text("매크로를 설정하면 단축키로 언제든 빠르게 보낼 수 있어요.");
-
-                ImGui::Dummy(ImVec2(0, 10));
-
-                // 상단 버튼들 (저장, 불러오기, 리셋)
-                if (ImGui::Button(ICON_MD_SAVE " 저장")) {
-                    save_macros_to_yaml(macros, macro_config_file);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button(ICON_MD_FOLDER_OPEN " 불러오기")) {
-                    load_macros_from_yaml(macros, macro_config_file);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button(ICON_MD_REFRESH " 리셋")) {
-                    reset_macros(macros);
-                }
-
-                ImGui::Separator();
-                ImGui::Dummy(ImVec2(0, 10));
-
-
-                // 키 감지 모드 안내
-                if (detecting_macro_idx >= 0) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
-                    ImGui::Text("매크로 %d의 단축키를 눌러주세요... (ESC로 취소)", detecting_macro_idx + 1);
-                    ImGui::PopStyleColor();
-                    ImGui::Separator();
-
-                    // 키 감지
-                    int detected_key = detect_pressed_key();
-                    if (detected_key > 0) {
-                        // 중복 검사
-                        int duplicate_idx = -1;
-                        for (int j = 0; j < macros.size(); j++) {
-                            if (j != detecting_macro_idx && macros[j].hotkey == detected_key) {
-                                duplicate_idx = j;
-                                break;
-                            }
-                        }
-
-                        if (duplicate_idx >= 0) {
-                            // 중복 발견 - 경고 표시
-                            duplicate_warning_macro = detecting_macro_idx;
-                            duplicate_with_macro = duplicate_idx;
-                            macros[detecting_macro_idx].hotkey = detected_key;
-                            detecting_macro_idx = -1;
-                        } else {
-                            // 중복 없음 - 바로 설정
-                            macros[detecting_macro_idx].hotkey = detected_key;
-                            detecting_macro_idx = -1;
-                        }
-                    } else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-                        detecting_macro_idx = -1;
-                    }
-                }
-
-                // 중복 경고 표시
-                for (int i = 0; i < macros.size(); i++) {
-                    ImGui::PushID(i);
-
-                    ImGui::Text("매크로 %d", i + 1);
-                    ImGui::Separator();
-
-                    ImGui::SetNextItemWidth(150);
-                    ImGui::Text("이름");
-                    ImGui::SameLine(50);
-                    ImGui::InputText("##이름", macros[i].name, sizeof(macros[i].name));
-                    ImGui::SameLine();
-
-                    ImGui::Checkbox("HEX", &macros[i].is_hex);
-
-                    ImGui::SetNextItemWidth(300);
-                    ImGui::Text("데이터");
-                    ImGui::SameLine(50);
-                    ImGui::InputText("##데이터", macros[i].data, sizeof(macros[i].data));
-                    ImGui::SameLine();
-
-                    ImGui::SetNextItemWidth(75);
-                    ImGui::Combo("##라인 엔딩", &macros[i].line_ending, line_ending_names, 4);
-
-                    // 단축키 표시 및 설정 버튼
-                    // 중복 검사
-                    bool has_duplicate = false;
-                    int dup_idx = -1;
-                    if (macros[i].hotkey > 0) {
-                        for (int j = 0; j < macros.size(); j++) {
-                            if (j != i && macros[j].hotkey == macros[i].hotkey) {
-                                has_duplicate = true;
-                                dup_idx = j;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (has_duplicate) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
-                        ImGui::Text("단축키: %s (매크로 %d와 중복)",
-                                   available_hotkeys[macros[i].hotkey].name, dup_idx + 1);
-                        ImGui::PopStyleColor();
-                    } else {
-                        ImGui::Text("단축키: %s", available_hotkeys[macros[i].hotkey].name);
-                    }
-                    ImGui::SameLine();
-
-                    if (detecting_macro_idx == i) {
-                        if (ImGui::Button( " 취소")) {
-                            detecting_macro_idx = -1;
-                        }
-                    } else {
-                        if (ImGui::Button( " 키 등록 ")) {
-                            detecting_macro_idx = i;
-                        }
-                    }
-
-                    ImGui::SameLine();
-                    if (ImGui::Button( " 해제 ")) {
-                        macros[i].hotkey = 0;
-                    }
-
-                    ImGui::SameLine();
-                    if (ImGui::Button( " 보내기 ")) {
-                        send_data(serial, macros[i].data, macros[i].is_hex, macros[i].line_ending);
-                        received_lines.push_back("[매크로] " + std::string(macros[i].name) + " 전송됨");
-
-                        // 버퍼 업데이트
-                        update_received_buffer(received_lines, received_text_buffer, sizeof(received_text_buffer));
-                    }
-
-                    ImGui::Spacing();
-                    ImGui::PopID();
-
-                    ImGui::Dummy(ImVec2(0, 10));
-                }
-
-                ImGui::End();
-            }
-
-
-            // 시리얼 모니터 창
-            {
-                ImGui::Begin("시리얼 모니터", NULL);
-
-                ImGui::Text("연결 설정");
-
-                ImGui::SetNextItemWidth(200);
-
-                if (ImGui::BeginCombo("##port", available_ports.empty() ? "포트 없음" : available_ports[selected_port_idx].c_str())) {
-                    for (int i = 0; i < available_ports.size(); i++) {
-                        bool is_selected = (selected_port_idx == i);
-                        if (ImGui::Selectable(available_ports[i].c_str(), is_selected)) {
-                            selected_port_idx = i;
-                        }
-                        if (is_selected) {
-                            ImGui::SetItemDefaultFocus();
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-
-                ImGui::SameLine();
-
-                if (ImGui::Button(ICON_MD_SYNC)) {
-                    available_ports = SerialPort::getAvailablePorts();
-                    if (selected_port_idx >= available_ports.size()) {
-                        selected_port_idx = 0;
-                    }
-                }
-
-                ImGui::SameLine();
-
-                ImGui::SetNextItemWidth(120);
-                if (ImGui::BeginCombo("##baud", baud_rate_names[selected_baud_idx])) {
-                    for (int i = 0; i < 5; i++) {
-                        bool is_selected = (selected_baud_idx == i);
-                        if (ImGui::Selectable(baud_rate_names[i], is_selected)) {
-                            selected_baud_idx = i;
-                        }
-                        if (is_selected) {
-                            ImGui::SetItemDefaultFocus();
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-
-                ImGui::SameLine();
-
-                if (serial.is_connected()) {
-                    if (ImGui::Button(ICON_MD_LINK_OFF " 연결 해제")) {
-                        serial.disconnect();
-                        received_lines.push_back("[시스템] 연결 해제됨");
-
-                        // 버퍼 업데이트
-                        update_received_buffer(received_lines, received_text_buffer, sizeof(received_text_buffer));
-                    }
-                } else {
-                    if (ImGui::Button(ICON_MD_LINK " 포트 연결 ") && !available_ports.empty()) {
-                        if (serial.connect(available_ports[selected_port_idx], baud_rates[selected_baud_idx])) {
-                            received_lines.push_back("[시스템] 연결됨: " + available_ports[selected_port_idx] + " (" + baud_rate_names[selected_baud_idx] + " baud)");
-
-                            // 버퍼 업데이트
-                            update_received_buffer(received_lines, received_text_buffer, sizeof(received_text_buffer));
-                        }
-                    }
-                }
-
-                ImGui::Spacing();
-                ImGui::Separator();
-
-                ImGui::Dummy(ImVec2(0, 10));
-
-                ImGui::Text("하트비트 설정");
-                ImGui::Separator();
-
-                if (serial.is_heartbeat_enabled()) {
-                    if (ImGui::Button(ICON_MD_ECG_HEART " 하트비트 중지")) {
-                        serial.disable_heartbeat();
-                        received_lines.push_back("[시스템] 하트비트 중지됨");
-
-                        // 버퍼 업데이트
-                        update_received_buffer(received_lines, received_text_buffer, sizeof(received_text_buffer));
-                    }
-                } else {
-                    if (ImGui::Button(ICON_MD_ECG_HEART " 하트비트 시작") && serial.is_connected()) {
-                        std::vector<char> hb_data;
-
-                        if (heartbeat_as_hex) {
-                            hb_data = hex_to_bytes(heartbeat_buffer);
-                        } else {
-                            hb_data = std::vector<char>(heartbeat_buffer, heartbeat_buffer + strlen(heartbeat_buffer));
-                        }
-
-                        if (heartbeat_line_ending == 1) hb_data.push_back('\n');
-                        else if (heartbeat_line_ending == 2) hb_data.push_back('\r');
-                        else if (heartbeat_line_ending == 3) { hb_data.push_back('\r'); hb_data.push_back('\n'); }
-
-                        serial.enable_heartbeat(hb_data, heartbeat_interval);
-                        received_lines.push_back("[시스템] 하트비트 시작됨 (간격: " + std::to_string(heartbeat_interval) + "ms)");
-
-                        // 버퍼 업데이트
-                        update_received_buffer(received_lines, received_text_buffer, sizeof(received_text_buffer));
-                    }
-                }
-
-                ImGui::SameLine();
-                ImGui::Checkbox("HEX##hb", &heartbeat_as_hex);
-
-                ImGui::SetNextItemWidth(200);
-                ImGui::InputText("##hb_data", heartbeat_buffer, sizeof(heartbeat_buffer));
-                ImGui::SameLine();
-
-                ImGui::SetNextItemWidth(100);
-                ImGui::DragInt("간격(ms)##hb", &heartbeat_interval, 100, 100, 1000);
-
-
-
-                ImGui::Spacing();
-                ImGui::Separator();
-
-                ImGui::Dummy(ImVec2(0, 10));
-
-                ImGui::Text("수신 데이터");
-                ImGui::SameLine();
-                if (ImGui::Button(ICON_MD_DELETE " 지우기")) {
-                    received_lines.clear();
-                    received_text_buffer[0] = '\0';
-                }
-
-                ImGui::SameLine(0, 15);
-
-                ImGui::Checkbox("HEX##recv", &receive_as_hex);
-
-                ImGui::SameLine(0, 15);
-
-                ImGui::Checkbox("자동 스크롤", &auto_scroll);
-
-                ImGui::SameLine(0, 15);
-
-                ImGui::Checkbox("타임 스탬프", &show_timestamp);
-
-
-
-
-                // 수정된 부분: BeginChild를 사용하면서 텍스트 선택 가능하게 함
-                if (ImGui::BeginChild("ReceiveArea", ImVec2(0, -80), true, ImGuiWindowFlags_HorizontalScrollbar)) {
-                    for (const auto& line : received_lines) {
-                        ImGui::TextUnformatted(line.c_str());
-                    }
-
-                    // 자동 스크롤 처리
-                    if (scroll_to_bottom || (auto_scroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()))
-                        ImGui::SetScrollHereY(1.0f);
-                    scroll_to_bottom = false;
-                }
-                ImGui::EndChild();
-
-                ImGui::Dummy(ImVec2(0, 10));
-
-                ImGui::Text("송신 데이터");
-                ImGui::SameLine();
-                ImGui::Checkbox("HEX##send", &send_as_hex);
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(120);
-                ImGui::Combo("##send_ending", &send_line_ending, line_ending_names, 4);
-
-                ImGui::SetNextItemWidth(-70);
-                if (ImGui::InputText("##send", send_buffer, sizeof(send_buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                    send_data(serial, send_buffer, send_as_hex, send_line_ending);
-                    send_buffer[0] = '\0';
-                    ImGui::SetKeyboardFocusHere(-1);
-                }
-                ImGui::SameLine();
-
-                if (ImGui::Button(ICON_MD_SEND "보내기") && serial.is_connected()) {
-                    send_data(serial, send_buffer, send_as_hex, send_line_ending);
-                }
-
-                ImGui::End();
-            }
-
+            sm.render();
         });
-
-        save_macros_to_yaml(macros, macro_config_file);
     }
 
     ImguiApp::stop_background();
+
+    work_guard.reset();
+    io_context.stop();
+    io_thread.join();
 
     return 0;
 }
