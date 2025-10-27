@@ -9,6 +9,7 @@ add_subdirectory(lib/imgui)
 
 add_executable(main
     main.cpp
+    vSerial.cpp
 )
 
 # ImGui 라이브러리 연결
