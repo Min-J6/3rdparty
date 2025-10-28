@@ -158,21 +158,21 @@ public:
         const char* dev_prefixes[] = {"ttyS", "ttyUSB", "ttyACM"};
         scan_dir("/dev", dev_prefixes, 3);
 
-        // /dev/pts 검색 (숫자만)
-        DIR* pts_dir = opendir("/dev/pts/");
-        if (pts_dir) {
-            struct dirent* entry;
-            while ((entry = readdir(pts_dir))) {
-                if (isdigit(entry->d_name[0])) {
-                    std::string port;
-                    port.reserve(16);
-                    port = "/dev/pts/";
-                    port += entry->d_name;
-                    ports.push_back(std::move(port));
-                }
-            }
-            closedir(pts_dir);
-        }
+        // // /dev/pts 검색 (숫자만)
+        // DIR* pts_dir = opendir("/dev/");
+        // if (pts_dir) {
+        //     struct dirent* entry;
+        //     while ((entry = readdir(pts_dir))) {
+        //         if (isdigit(entry->d_name[0])) {
+        //             std::string port;
+        //             port.reserve(16);
+        //             port = "/dev/";
+        //             port += entry->d_name;
+        //             ports.push_back(std::move(port));
+        //         }
+        //     }
+        //     closedir(pts_dir);
+        // }
 
         std::sort(ports.begin(), ports.end());
         return ports;
