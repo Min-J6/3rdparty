@@ -603,6 +603,7 @@ private:
 
 
         std::string temp;
+        if (!received_lines.size())
         for (const auto& l : received_lines) {
             temp += l + "\n";
         }

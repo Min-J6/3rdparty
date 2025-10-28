@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
-#include <deque> // deque가 여전히 유연성 면에서 좋습니다.
+#include <deque>
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -15,10 +15,13 @@
 #include <cstring>
 #include <cctype>
 
+using namespace boost::asio;
+
 class SerialPort {
 public:
     explicit SerialPort(boost::asio::io_context& io)
-        : ioContext_(io), serialPort_(io), readBuffer_(1024), writingInProgress_(false) {}
+        : ioContext_(io), serialPort_(io), readBuffer_(8192), writingInProgress_(false) {
+    }
 
     ~SerialPort() {
         close();
@@ -37,11 +40,21 @@ public:
         try
         {
             serialPort_.open(portName);
-            serialPort_.set_option(boost::asio::serial_port_base::baud_rate(baudRate));
-            serialPort_.set_option(boost::asio::serial_port_base::character_size(8));
-            serialPort_.set_option(boost::asio::serial_port_base::stop_bits(boost::asio::serial_port_base::stop_bits::one));
-            serialPort_.set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
-            serialPort_.set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
+            serialPort_.set_option(serial_port_base::baud_rate(baudRate));
+            serialPort_.set_option(serial_port_base::character_size(8));
+            serialPort_.set_option(serial_port_base::stop_bits(serial_port_base::stop_bits::one));
+            serialPort_.set_option(serial_port_base::parity(serial_port_base::parity::none));
+            serialPort_.set_option(serial_port_base::flow_control(serial_port_base::flow_control::none));
+
+            // 저수준 버퍼 크기 증가 (OS 레벨)
+            #ifdef __linux__
+            int fd = serialPort_.native_handle();
+            int rx_buffer_size = 65536; // 수신 버퍼 크기 증가
+            setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rx_buffer_size, sizeof(rx_buffer_size));
+            int tx_buffer_size = 65536; // 송신 버퍼 크기 증가
+            setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &tx_buffer_size, sizeof(tx_buffer_size));
+            #endif
+
             do_read();
 
             if (on_open) on_open();
@@ -59,6 +72,7 @@ public:
         if (!is_open())
             return;
 
+
         boost::system::error_code ec;
         serialPort_.cancel(ec);
         serialPort_.close(ec);
@@ -66,6 +80,7 @@ public:
 
         std::scoped_lock lock(writeMutex_);
         writeQueue_.clear();
+
 
         if (on_close) on_close();
     }
@@ -78,14 +93,15 @@ public:
         if (!is_open() || data.empty())
             return;
 
+
         {
             std::scoped_lock lock(writeMutex_);
             writeQueue_.push_back(data);
         }
 
 
-        boost::asio::post(ioContext_, [this]() {
-            if (!writingInProgress_) {
+        boost::asio::dispatch(ioContext_, [this]() {
+            if (!writingInProgress_.exchange(true)) {
                 do_write();
             }
         });
@@ -96,8 +112,25 @@ public:
         send(std::vector<char>(text.begin(), text.end()));
     }
 
+    void send(std::vector<char>&& data) {
+        if (!is_open() || data.empty())
+            return;
+
+        {
+            std::scoped_lock lock(writeMutex_);
+            writeQueue_.push_back(std::move(data));
+        }
+
+        boost::asio::dispatch(ioContext_, [this]() {
+            if (!writingInProgress_.exchange(true)) {
+                do_write();
+            }
+        });
+    }
+
     static std::vector<std::string> getAvailablePorts() {
         std::vector<std::string> ports;
+        ports.reserve(16);
 
         auto scan_dir = [&](const char* path, const char* prefix[], int count) {
             DIR* dir = opendir(path);
@@ -106,8 +139,15 @@ public:
             struct dirent* entry;
             while ((entry = readdir(dir))) {
                 for (int i = 0; i < count; i++) {
-                    if (strncmp(entry->d_name, prefix[i], strlen(prefix[i])) == 0) {
-                        ports.push_back(std::string(path) + "/" + entry->d_name);
+                    size_t prefix_len = strlen(prefix[i]);
+                    if (strncmp(entry->d_name, prefix[i], prefix_len) == 0) {
+                        // string concatenation 최적화
+                        std::string port;
+                        port.reserve(strlen(path) + strlen(entry->d_name) + 2);
+                        port = path;
+                        port += "/";
+                        port += entry->d_name;
+                        ports.push_back(std::move(port));
                         break;
                     }
                 }
@@ -124,7 +164,11 @@ public:
             struct dirent* entry;
             while ((entry = readdir(pts_dir))) {
                 if (isdigit(entry->d_name[0])) {
-                    ports.push_back(std::string("/dev/pts/") + entry->d_name);
+                    std::string port;
+                    port.reserve(16);
+                    port = "/dev/pts/";
+                    port += entry->d_name;
+                    ports.push_back(std::move(port));
                 }
             }
             closedir(pts_dir);
@@ -142,32 +186,35 @@ private:
         serialPort_.async_read_some(boost::asio::buffer(readBuffer_),
             [this](const boost::system::error_code& ec, std::size_t bytesTransferred) {
 
-                if (bytesTransferred > 0)
+                // 에러 처리
+                if (ec)
                 {
-                    std::vector<char> data(readBuffer_.begin(), readBuffer_.begin() + bytesTransferred);
-                    if (on_receive) on_receive(data);
+                    if (ec != boost::asio::error::operation_aborted) {
+                        if (on_error) on_error(ec.message());
+                        std::cerr << "[Error] [Serial Port] 읽기 실패: " << ec.message() << std::endl;
+                        close();
+                    }
+                    return;
                 }
 
-                if (!ec)
+
+                // 데이터 수신 처리
+                if (bytesTransferred > 0 && on_receive)
                 {
-                    do_read();
+                    on_receive(std::vector<char>(readBuffer_.begin(), readBuffer_.begin() + bytesTransferred));
                 }
-                else if (ec != boost::asio::error::operation_aborted)
-                {
-                    if (on_error)on_error(ec.message());
-                    std::cerr << "[Error] [Serial Port] 읽기 실패: " << ec.message() << std::endl;
-                    close();
-                }
+
+
+                do_read();
             });
     }
 
+
     void do_write() {
-        if (!is_open())
+        if (!is_open()) {
+            writingInProgress_.store(false);
             return;
-
-
-        // 쓰기 작업 시작 플래그 설정
-        writingInProgress_ = true;
+        }
 
 
         // 큐에 있는 데이터들을 버퍼 시퀀스로 교환 (Swap)
@@ -179,13 +226,14 @@ private:
 
         // 전송할 데이터가 없으면 바로 종료
         if (activeWriteQueue_.empty()) {
-            writingInProgress_ = false;
+            writingInProgress_.store(false);
             return;
         }
 
 
-        // 버퍼 시퀀스 생성 (메모리 복사 없음)
+        // 버퍼 시퀀스 생성
         writeBuffers_.clear();
+        writeBuffers_.reserve(activeWriteQueue_.size()); // 재할당 방지
         for (const auto& data : activeWriteQueue_) {
             writeBuffers_.push_back(boost::asio::buffer(data));
         }
@@ -195,13 +243,13 @@ private:
         boost::asio::async_write(serialPort_, writeBuffers_,
             [this](const boost::system::error_code& ec, std::size_t /*bytesTransferred*/) {
 
-                // 전송에 사용된 큐는 비워줍니다.
+                // 전송에 사용된 큐는 비우기
                 activeWriteQueue_.clear();
 
                 if (ec)
                 {
-                    // 에러 발생 시 쓰기 작업 플래그를 설정
-                    writingInProgress_ = false;
+                    // 에러 발생 시 쓰기 작업 플래그를 해제
+                    writingInProgress_.store(false);
 
                     if (on_error) on_error(ec.message());
                     std::cerr << "[Error] [Serial Port] 쓰기 실패: " << ec.message() << std::endl;
@@ -221,7 +269,7 @@ private:
                     do_write();
                 } else {
                     // 더 이상 쓸 데이터가 없으면 플래그를 내림
-                    writingInProgress_ = false;
+                    writingInProgress_.store(false);
                 }
             });
     }
@@ -234,5 +282,5 @@ private:
     std::deque<std::vector<char>> writeQueue_; // 데이터가 추가되는 기본 큐 (스레드 안전)
     std::deque<std::vector<char>> activeWriteQueue_; // 실제 전송에 사용될 데이터 큐 (do_write 전용)
     std::vector<boost::asio::const_buffer> writeBuffers_; // 분산-수집 I/O를 위한 버퍼 시퀀스
-    bool writingInProgress_; // 현재 쓰기 작업이 진행 중인지 나타내는 플래그
+    std::atomic<bool> writingInProgress_; // atomic으로 변경하여 락 없는 플래그 관리
 };
