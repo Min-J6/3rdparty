@@ -20,7 +20,7 @@ using namespace boost::asio;
 class SerialPort {
 public:
     explicit SerialPort(boost::asio::io_context& io)
-        : ioContext_(io), serialPort_(io), readBuffer_(8192), writingInProgress_(false) {
+        : ioContext_(io), serialPort_(io), readStreamBuffer_(8192), writingInProgress_(false) {
     }
 
     ~SerialPort() {
@@ -183,12 +183,10 @@ private:
     void do_read() {
         if (!is_open()) return;
 
-        serialPort_.async_read_some(boost::asio::buffer(readBuffer_),
+        boost::asio::async_read_until(serialPort_, readStreamBuffer_, '\r',
             [this](const boost::system::error_code& ec, std::size_t bytesTransferred) {
 
-                // 에러 처리
-                if (ec)
-                {
+                if (ec) {
                     if (ec != boost::asio::error::operation_aborted) {
                         if (on_error) on_error(ec.message());
                         std::cerr << "[Error] [Serial Port] 읽기 실패: " << ec.message() << std::endl;
@@ -198,16 +196,21 @@ private:
                 }
 
 
-                // 데이터 수신 처리
-                if (bytesTransferred > 0 && on_receive)
-                {
-                    on_receive(std::vector<char>(readBuffer_.begin(), readBuffer_.begin() + bytesTransferred));
-                }
+                std::istream is(&readStreamBuffer_);
+                std::string message;
+                std::getline(is, message, '\r');
 
+                // Debug print
+                // std::cout << "완전한 메시지 수신: " << message << std::endl;
+
+                if (on_receive) {
+                    on_receive(std::vector<char>(message.begin(), message.end()));
+                }
 
                 do_read();
             });
     }
+
 
 
     void do_write() {
@@ -276,7 +279,7 @@ private:
 
     boost::asio::io_context& ioContext_;
     boost::asio::serial_port serialPort_;
-    std::vector<char> readBuffer_;
+    boost::asio::streambuf readStreamBuffer_;
 
     std::mutex writeMutex_;
     std::deque<std::vector<char>> writeQueue_; // 데이터가 추가되는 기본 큐 (스레드 안전)
@@ -284,3 +287,4 @@ private:
     std::vector<boost::asio::const_buffer> writeBuffers_; // 분산-수집 I/O를 위한 버퍼 시퀀스
     std::atomic<bool> writingInProgress_; // atomic으로 변경하여 락 없는 플래그 관리
 };
+
