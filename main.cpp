@@ -501,7 +501,6 @@ public:
                 received_text_buffer[0] = '\0';
             }
 
-            ImGui::SameLine(0, 15);
 
             ImGui::Checkbox("HEX##recv", &receive_as_hex);
 
@@ -512,6 +511,14 @@ public:
             ImGui::SameLine(0, 15);
 
             ImGui::Checkbox("타임 스탬프", &show_timestamp);
+
+            ImGui::SameLine(0, 15);
+
+            ImGui::SetNextItemWidth(120);
+            ImGui::Combo("##recv_ending", &recv_line_ending, recv_line_ending_name, 4);
+
+
+
 
 
 
@@ -598,6 +605,11 @@ private:
             received_lines.push_back(line_str);
 
         }
+
+        // 받은 데이터 라인 엔딩 처리
+        if (recv_line_ending == 1) received_lines.push_back("\n");
+        else if (recv_line_ending == 2) received_lines.push_back("\r");
+        else if (recv_line_ending == 3) { received_lines.push_back("\r"); received_lines.push_back("\n"); }
 
         size_t buffer_size = sizeof(received_text_buffer);
 
@@ -811,6 +823,8 @@ private:
     bool auto_scroll = true;
     bool scroll_to_bottom = false;
     bool show_timestamp = false;
+    int recv_line_ending = 0;
+    const char* recv_line_ending_name[4] = {"없음", "LF", "CR", "CR+RF"};
 
 
     // 하트 비트 관련
