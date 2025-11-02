@@ -31,7 +31,7 @@ public:
     }
 
     bool run_one() {
-        std::function<void()> task;
+        static std::function<void()> task;
         {
             std::lock_guard<std::mutex> lock(queue_mutex);
 
