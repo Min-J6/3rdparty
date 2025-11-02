@@ -62,8 +62,7 @@ private:
 
 TaskQueue main_thread_task_queue;
 
-// [가정] 네트워크 스레드
-// 짧은 시간에 많은 작업을 보냅니다.
+
 void network_thread_loop() {
     for (int i = 0; i < 20; ++i) { // 20개의 작업
         std::this_thread::sleep_for(std::chrono::milliseconds(20)); // 20ms마다 전송
@@ -76,7 +75,8 @@ void network_thread_loop() {
     }
 }
 
-// [애플리케이션 메인 루프]
+
+// 애플리케이션 메인 루프
 int main() {
     std::thread network_worker(network_thread_loop);
 
@@ -84,7 +84,7 @@ int main() {
 
 
     while (app_running) {
-        main_thread_task_queue.run_one();
+        main_thread_task_queue.run_one();   // 큐가 있으면 작업하나만 실행함
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
