@@ -549,7 +549,6 @@ public:
             ImGui::SetNextItemWidth(-70);
             if (ImGui::InputText("##send", send_buffer, sizeof(send_buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
                 send_data(send_buffer, send_as_hex, send_line_ending);
-                send_buffer[0] = '\0';
                 ImGui::SetKeyboardFocusHere(-1);
             }
             ImGui::SameLine();
