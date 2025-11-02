@@ -2,7 +2,7 @@
 #include "lib/imgui/imgui_app.h"
 #include "lib/imgui/ImCoolBar.h"
 #include "lib/imgui/icon.h"
-#include "lib/serial_port.hpp"
+#include "lib/SerialPort.hpp"
 #include <sstream>
 #include <iomanip>
 #include <ctime>
