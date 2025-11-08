@@ -15,7 +15,7 @@
 
 
 
-class ImguiApp {
+class ImGuiBackground {
 public:
     // 렌더링 콜백 설정 (매 프레임마다 호출됨)
     static void show_imgui(std::function<void()> func);
@@ -38,25 +38,25 @@ private:
     bool run();
 
     // 백그라운드 스레드에서 시작
-    void startBackground();
+    void _start_background();
 
     // 백그라운드 스레드 종료
     void stopBackground();
 
-    // 메인 독스페이스
+    // 메인 독스페이스 GUI
     void show_dockspace();
 
-    // 커스텀 타이틀바
+    // 커스텀 타이틀바 GUI
     void show_titlebar();
 
 
 
     // 싱글톤
-    ImguiApp() = default;
-    ImguiApp(const ImguiApp&) = delete;
-    ImguiApp& operator=(const ImguiApp&) = delete;
+    ImGuiBackground() = default;
+    ImGuiBackground(const ImGuiBackground&) = delete;
+    ImGuiBackground& operator=(const ImGuiBackground&) = delete;
 
-    static ImguiApp& getInstance();
+    static ImGuiBackground& getInstance();
 
 
     // 렌더링 콜백

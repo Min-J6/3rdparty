@@ -1,4 +1,4 @@
-#include "imgui_app.h"
+#include "imgui_background.h"
 
 
 #define GLFW_EXPOSE_NATIVE_X11
@@ -59,21 +59,21 @@ GLFWwindow* window;
 
 
 
-ImguiApp& ImguiApp::getInstance() {
-    static ImguiApp instance;
+ImGuiBackground& ImGuiBackground::getInstance() {
+    static ImGuiBackground instance;
     return instance;
 }
 
 
 
-void ImguiApp::show_imgui(std::function<void()> func) {
+void ImGuiBackground::show_imgui(std::function<void()> func) {
     std::lock_guard<std::mutex> lock(getInstance().callback_mutex);
     getInstance().render_callback = func;
 }
 
 
 
-void ImguiApp::start_background(const std::string& title, const ImVec2& size) {
+void ImGuiBackground::start_background(const std::string& title, const ImVec2& size) {
     TITLE = title;
     WINDOW_WIDTH = size.x;
     WINDOW_HEIGHT = size.y;
@@ -82,9 +82,9 @@ void ImguiApp::start_background(const std::string& title, const ImVec2& size) {
     prev_docking_size        = docking_size;
     docking_pos              = ImVec2(0, 0);
 
-    getInstance().startBackground();
+    getInstance()._start_background();
 
-    while (!ImguiApp::is_running()) {
+    while (!ImGuiBackground::is_running()) {
         // 쓰레드가 켜질 때까지 대기
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -92,19 +92,19 @@ void ImguiApp::start_background(const std::string& title, const ImVec2& size) {
 
 
 
-void ImguiApp::stop_background() {
+void ImGuiBackground::stop_background() {
     getInstance().stopBackground();
 }
 
 
 
-bool ImguiApp::is_running() {
+bool ImGuiBackground::is_running() {
     return getInstance()._is_running.load();
 }
 
 
 
-bool ImguiApp::init() {
+bool ImGuiBackground::init() {
     // GLFW 초기화
     if (!glfwInit()) {
         std::cout << "[Error] [ImGui App]: GLFW 초기화 실패\n";
@@ -309,7 +309,7 @@ bool ImguiApp::init() {
 
 
 
-bool ImguiApp::run() {
+bool ImGuiBackground::run() {
     _is_running.store(true);
 
     while (!glfwWindowShouldClose(window) && _is_running.load()) {
@@ -408,7 +408,7 @@ bool ImguiApp::run() {
 
 
 
-void ImguiApp::show_dockspace() {
+void ImGuiBackground::show_dockspace() {
     // 도킹 크기와 위치 계산
     ImVec2 docking_content_pos = ImVec2(docking_pos.x, docking_pos.y + TITLEBAR_HEIGHT + 1.5f);
     ImVec2 docking_content_size = ImVec2(docking_size.x, docking_size.y - TITLEBAR_HEIGHT);
@@ -479,7 +479,7 @@ void ImguiApp::show_dockspace() {
 
 
 
-void ImguiApp::show_titlebar() {
+void ImGuiBackground::show_titlebar() {
     // X11 Display 가져오기
     Display* display = glfwGetX11Display();
 
@@ -584,7 +584,7 @@ void ImguiApp::show_titlebar() {
 
 
 
-void ImguiApp::startBackground() {
+void ImGuiBackground::_start_background() {
     if (render_thread.joinable()) {
         std::cout << "[Error] [ImGui App]: 에러\n";
         return;
@@ -600,9 +600,30 @@ void ImguiApp::startBackground() {
 
 
 
-void ImguiApp::stopBackground() {
+void ImGuiBackground::stopBackground() {
     _is_running.store(false);
     if (render_thread.joinable()) {
         render_thread.join();
+    }
+}
+
+
+namespace ImGui
+{
+    void start(const char* title, const ImVec2& size)
+    {
+        ImGuiBackground::start_background(title, size);
+    }
+    void stop()
+    {
+        ImGuiBackground::stop_background();
+    }
+    void draw(std::function<void()> render_callback)
+    {
+        ImGuiBackground::show_imgui(render_callback);
+    }
+    bool isRunning()
+    {
+        return ImGuiBackground::is_running();
     }
 }

@@ -4434,12 +4434,16 @@ typedef ImFontAtlasRect ImFontAtlasCustomRect;
 
 // Include imgui_user.h at the end of imgui.h
 // May be convenient for some users to only explicitly include vanilla imgui.h and have extra stuff included.
-#ifdef IMGUI_INCLUDE_IMGUI_USER_H
-#ifdef IMGUI_USER_H_FILENAME
-#include IMGUI_USER_H_FILENAME
-#else
-#include "imgui_user.h"
-#endif
-#endif
+#ifndef IMGUI_INCLUDE_IMGUI_USER_H
+#define IMGUI_INCLUDE_IMGUI_USER_H
+#include <functional>
+namespace ImGui
+{
+    void start(const char* title, const ImVec2& size = ImVec2(1280, 720));
+    void stop();
+    void draw(std::function<void()> func);
+    bool isRunning();
+}
 
+#endif
 #endif // #ifndef IMGUI_DISABLE
