@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.10)
 
 # ImGui 라이브러리 정의
 add_library(imgui
-    imgui_app.cpp
+    imgui_background.cpp
     imgui.cpp
     imgui_draw.cpp
     imgui_widgets.cpp

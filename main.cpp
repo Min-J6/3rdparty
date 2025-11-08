@@ -852,33 +852,36 @@ private:
 
 
 int main(int, char**) {
-    ImguiApp::start_background("시리얼 모니터", ImVec2(480, 720));
-
     boost::asio::io_context io_context;
-    SerialMonitor sm(io_context);
+    SerialMonitor sm(io_context); // 시리얼 모니터
 
-    // 1. work_guard를 io_thread 생성 전에 만듭니다.
     auto work_guard = boost::asio::make_work_guard(io_context);
-
-    // 2. io_context.run()을 실행할 스레드를 시작합니다.
     std::thread io_thread([&io_context]() {
         io_context.run();
     });
 
-    // GUI 메인 루프
-    while (ImguiApp::is_running()) {
-        ImguiApp::show_imgui([&]() {
-            sm.render();
-        });
+
+    // GUI
+    {
+        ImGui::start("시리얼 모니터", ImVec2(480, 720));
+
+
+        // GUI 메인 루프
+        while (ImGui::isRunning()){
+            ImGui::draw([&]()
+            {
+                sm.render();
+            });
+        }
+
+        ImGui::stop();
     }
 
-    ImguiApp::stop_background();
 
-    // 3. GUI가 종료되면 work_guard를 리셋하여 io_context.run()이 반환되도록 합니다.
+    // 정리
     work_guard.reset();
-
-    // 4. io_context를 정지시키고 스레드가 완전히 종료될 때까지 기다립니다.
     io_context.stop();
+
     if (io_thread.joinable()) {
         io_thread.join();
     }
