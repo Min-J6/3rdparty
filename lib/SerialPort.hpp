@@ -27,12 +27,14 @@ public:
         close();
     }
 
-    std::function<void()> on_open;
-    std::function<void()> on_close;
-    std::function<void(const std::string&)> on_error;
-    std::function<void(const std::vector<char>&)> on_receive;
 
+    // 콜백
+    std::function<void()> on_open;                              // 포트가 열릴 때 호출되는 콜백
+    std::function<void()> on_close;                             // 포트가 닫힐 때 호출되는 콜백
+    std::function<void(const std::string&)> on_error;           // 에러 발생 시 호출되는 콜백
+    std::function<void(const std::vector<char>&)> on_receive;   // 메세지를 받을 때 호출되는 콜백
 
+    // 포트 열기
     bool open(const std::string& portName, unsigned int baudRate) {
         if (is_open())
             return true;
@@ -68,6 +70,7 @@ public:
         }
     }
 
+    // 포트 닫기
     void close() {
         if (!is_open())
             return;
@@ -85,11 +88,13 @@ public:
         if (on_close) on_close();
     }
 
+    // 포트가 열려 있는지 확인
     bool is_open() const {
         return serialPort_.is_open();
     }
 
-    void send(const std::vector<char>& data) {
+    // byte 배열을 전송
+    void write(const std::vector<char>& data) {
         if (!is_open() || data.empty())
             return;
 
@@ -107,12 +112,14 @@ public:
         });
     }
 
-    void send(const std::string& text) {
+    // 문자열을 전송 (byte 배열로 변환)
+    void write(const std::string& text) {
         if (text.empty()) return;
-        send(std::vector<char>(text.begin(), text.end()));
+        write(std::vector<char>(text.begin(), text.end()));
     }
 
-    void send(std::vector<char>&& data) {
+    // byte 배열을 전송 (std::vector<char>로 변환)
+    void write(std::vector<char>&& data) {
         if (!is_open() || data.empty())
             return;
 
@@ -128,7 +135,8 @@ public:
         });
     }
 
-    static std::vector<std::string> getAvailablePorts() {
+    // 포트 목록 가져오기
+    static std::vector<std::string> get_port_list() {
         std::vector<std::string> ports;
         ports.reserve(16);
 
@@ -200,9 +208,6 @@ private:
                 std::string message;
                 std::getline(is, message, '\r');
 
-                // Debug print
-                // std::cout << "완전한 메시지 수신: " << message << std::endl;
-
                 if (on_receive) {
                     on_receive(std::vector<char>(message.begin(), message.end()));
                 }
@@ -210,8 +215,6 @@ private:
                 do_read();
             });
     }
-
-
 
     void do_write() {
         if (!is_open()) {
@@ -276,6 +279,7 @@ private:
                 }
             });
     }
+
 
     boost::asio::io_context& ioContext_;
     boost::asio::serial_port serialPort_;
