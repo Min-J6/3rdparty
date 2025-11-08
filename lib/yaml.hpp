@@ -44376,7 +44376,10 @@ public:
 
         std::ifstream f(m_path);
         if (!f.is_open()) {
-            std::cerr << "[Info ] [Yaml] 새 파일 생성: " << m_path << std::endl;
+            std::cout << "[Info ] [Yaml] 새 파일 생성: " << m_path << std::endl;
+
+            m_tree.rootref() |= c4::yml::MAP;
+
             return false;
         }
 
@@ -44388,6 +44391,9 @@ public:
             m_tree = c4::yml::parse_in_arena(c4::to_csubstr(m_raw));
         } catch (const std::exception& e) {
             std::cerr << "[Error] [Yaml] 파싱 실패: " << e.what() << std::endl;
+            // 파싱 실패 시에도 빈 맵으로 초기화하는 것이 안전합니다.
+            m_tree.clear();
+            m_tree.rootref() |= c4::yml::MAP;
             return false;
         }
         return true;
@@ -44459,24 +44465,47 @@ public:
     // ----------------------------------------------------
     // [] 연산자 접근 (읽기/쓰기 통합)
     // ----------------------------------------------------
+
     struct AccessProxy {
         Yaml* yaml;
         std::string key;
 
-        // --- 쓰기 (단일 값) ---
+        // --- 쓰기 (단일 값) - 항상 덮어쓰기 ---
         template<typename T>
         AccessProxy& operator=(const T& val) {
             yaml->set(key, val);
             return *this;
         }
 
-        // --- 쓰기 (initializer_list → vector 변환) ---
+        // --- 쓰기 (initializer_list) - 항상 덮어쓰기 ---
         template<typename T>
         AccessProxy& operator=(std::initializer_list<T> list) {
             std::vector<T> vec(list);
             yaml->setList(key, vec);
             return *this;
         }
+
+        // --- [추가] 기본값 쓰기 (단일 값) - 없으면 설정 ---
+        template<typename T>
+        AccessProxy& operator|=(const T& val) {
+            auto node = yaml->findNode(key);
+            if (!node.valid()) {
+                yaml->set(key, val);
+            }
+            return *this;
+        }
+
+        // --- [추가] 기본값 쓰기 (initializer_list) - 없으면 설정 ---
+        template<typename T>
+        AccessProxy& operator|=(std::initializer_list<T> list) {
+            auto node = yaml->findNode(key);
+            if (!node.valid()) {
+                std::vector<T> vec(list);
+                yaml->setList(key, vec);
+            }
+            return *this;
+        }
+
 
         // --- 읽기 (단일 값 변환) ---
         template<typename T>
@@ -44543,10 +44572,16 @@ private:
         auto segs = parsePath(path);
         auto node = m_tree.rootref();
 
+        // 루트 노드가 유효하지 않으면 (즉, 트리가 비어있으면)
+        // 맵(MAP) 타입으로 먼저 초기화
+        if (!node.valid()) {
+            node |= c4::yml::MAP;
+        }
+
         for (auto& s : segs) {
             if (!node.is_map()) node |= c4::yml::MAP;
 
-            auto key_cs = m_tree.to_arena(c4::to_csubstr(s.name));
+            auto key_cs = m_tree.to_arena(c4::to_csubstr(s.name)); // 이 시점엔 트리가 초기화됨
             auto next = node.find_child(key_cs);
             if (!next.valid()) {
                 next = node.append_child();
