@@ -39,6 +39,7 @@ option(ENABLE_QOS_PROVIDER "QoS 제공자 지원 활성화" ON)
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake/Modules" ${CMAKE_MODULE_PATH})
 set(generated_defconfig_src "${CMAKE_CURRENT_SOURCE_DIR}/core/ddsi/defconfig.c")
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 
 # 의존성 체크
@@ -123,9 +124,7 @@ endif()
 # 테스트 및 하위 디렉토리 추가
 add_subdirectory(tools)
 add_subdirectory(ddsrt)
-if(BUILD_IDLC)
-  add_subdirectory(idl)
-endif()
+add_subdirectory(idl)
 add_subdirectory(security)
 if(ENABLE_ICEORYX)
   add_subdirectory(psmx_iox)

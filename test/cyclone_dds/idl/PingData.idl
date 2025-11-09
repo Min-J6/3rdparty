@@ -1,0 +1,9 @@
+module PingData
+{
+  struct Msg
+  {
+    @key
+    long client_id;      // 클라이언트 ID
+    long long timestamp; // ms
+  };
+};
