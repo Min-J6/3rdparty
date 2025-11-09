@@ -1,261 +1,157 @@
-// SocketClient.h (work_guard 적용 최종 버전)
 #pragma once
-
 #include <iostream>
 #include <string>
-#include <vector>
 #include <functional>
-#include <thread>
-#include <atomic>
-#include <memory>
-#include <deque>
-#include <future>
-
+#include <memory> // std::make_shared
+#include <thread> // std::thread
 #include <boost/asio.hpp>
-#include <boost/system/error_code.hpp>
 
 using boost::asio::ip::tcp;
 
-class SocketClient : public std::enable_shared_from_this<SocketClient> {
+class Client {
 public:
-    using ConnectCallback = std::function<void()>;
-    using MessageCallback = std::function<void(const std::vector<char>&)>;
-    using DisconnectCallback = std::function<void()>;
+    // 콜백 변수
+    std::function<void(const std::string&)> on_receive;             // 메세지 수신시 호출
+    std::function<void(const boost::system::error_code&)> on_error; // 에러 발생시 호출
+    std::function<void()> on_connect;                               // 연결 성공시 호출
+    std::function<void()> on_disconnect;                            // 연결 종료시 호출
 
-    SocketClient(const std::string& host = "127.0.0.1", int port = 5000)
-        : host_(host),
-          port_(std::to_string(port)),
+
+    Client()
+        : work_guard_(boost::asio::make_work_guard(io_context_)),
           socket_(io_context_),
-          resolver_(io_context_),
-          work_guard_(boost::asio::make_work_guard(io_context_)),
-          write_strand_(boost::asio::make_strand(io_context_)) {
-        _running.store(false);
-    }
-
-
-    ~SocketClient() {
-        disconnect();
-    }
-
-
-    // 콜백 설정
-    ConnectCallback on_connect;
-    MessageCallback on_message;
-    DisconnectCallback on_disconnect;
-
-
-    bool connect() {
-        if (_running.load()) {
-            std::cout << "[Warning] [Client] 이미 연결되어 있음\n";
-            return true;
-        }
-
-        // I/O 스레드를 먼저 시작
-        io_thread_ = std::thread([this]() { io_context_.run(); });
-
-        auto promise = std::make_shared<std::promise<bool>>();
-        std::future<bool> future = promise->get_future();
-
-
-
-
-        // post를 사용하여 resolve 작업을 io_context 스레드에서 실행
-        boost::asio::post(io_context_, [this, self = shared_from_this(), promise]() {
-            resolver_.async_resolve(host_, port_,
-                [this, self, promise](const boost::system::error_code& ec, tcp::resolver::results_type endpoints) {
-                    if (!ec) {
-                        boost::asio::async_connect(socket_, endpoints,
-                            [this, self, promise](const boost::system::error_code& ec, const tcp::endpoint& endpoint) {
-                                if (!ec) {
-                                    promise->set_value(true);
-                                } else {
-                                    std::cerr << "[Error] [Client] " << host_ << ":" << port_ << " 서버 연결 실패: " << ec.message() << std::endl;
-                                    promise->set_value(false);
-                                }
-                            });
-                    } else {
-                        std::cerr << "[Error] [Client] " << host_ << ":" << port_ << " 주소 변환 실패: " << ec.message() << std::endl;
-                        promise->set_value(false);
-                    }
-                });
-        });
-
-        bool result = future.get();
-
-
-
-        if (result) {
-            std::cout << "[Info ] [Client] " << host_ << ":" << port_ << " 서버에 연결\n";
-            _running.store(true);
-
-            // 연결 성공 후, 메시지 수신 시작
-            do_read();
-
-            if (on_connect) on_connect();
-        }
-
-        else {
-            // 연결 실패 시 io_context와 스레드 정리
-            stop_context();
-        }
-
-
-
-        return result;
-    }
-
-
-    void send(const std::string& data) {
-
-        if (!is_connected()) {
-            std::cerr << "[Error] [Client] 서버에 연결되어 있지 않음" << std::endl;
-            return;
-        }
-
-
-        boost::asio::post(write_strand_, [this, data, self = shared_from_this()]() {
-            bool write_in_progress = !write_msgs_.empty();
-            write_msgs_.push_back(data);
-            if (!write_in_progress) {
-                do_write();
+          resolver_(io_context_)
+    {
+        // 쓰레드 생성
+        io_thread_ = std::thread([this]() {
+            try {
+                io_context_.run();
+            } catch (std::exception& e) {
+                std::cerr << "[Error] [Client] IO 스레드 예외 발생: " << e.what() << std::endl;
             }
         });
     }
 
-
-    void disconnect() {
-        if (!_running.exchange(false)) return;
-
-
-
-        // io_context 스레드에서 소켓을 닫도록 post
-        boost::asio::post(io_context_, [this]() {
-            boost::system::error_code ec;
-            if (socket_.is_open()) {
-                socket_.shutdown(tcp::socket::shutdown_both, ec);
-                socket_.close(ec);
-            }
-        });
-
-
-
-        stop_context();
-        std::cout << "[Info ] [Client] 서버와 연결 끊김\n";
-    }
-
-
-    bool is_connected() const {
-        return _running.load() && socket_.is_open();
-    }
-
-private:
-    void stop_context() {
-        // work_guard를 리셋하여 io_context가 작업을 마치고 run()을 종료할 수 있도록 함
+    ~Client() {
+        close();
         work_guard_.reset();
+
+        if (!io_context_.stopped()) {
+            io_context_.stop();
+        }
+
         if (io_thread_.joinable()) {
             io_thread_.join();
         }
-        io_context_.reset();
     }
 
-
-    void do_read() {
-        // post를 사용하여 io_context 스레드에서 실행되도록 보장
-        boost::asio::post(io_context_, [this, self = shared_from_this()]() {
-            socket_.async_read_some(boost::asio::buffer(buffer_),
-                [this, self](const boost::system::error_code& ec, std::size_t length) {
+    // 비동기 서버 연결
+    void connect(const std::string& host, short port) {
+        boost::asio::post(io_context_, [this, host, port]() {
+            resolver_.async_resolve(host, std::to_string(port),
+                [this](const boost::system::error_code& ec, tcp::resolver::results_type endpoints)
+                {
                     if (!ec) {
-                        if (on_message) on_message({buffer_.begin(), buffer_.begin() + length});
-                        do_read(); // 다음 읽기 시작
+                        do_connect(endpoints);
                     } else {
-                        if (ec != boost::asio::error::operation_aborted) {
-                            if (on_disconnect) on_disconnect();
-                        }
+                        handle_error(ec, "Resolve");
                     }
                 });
         });
     }
 
-
-    void do_write() {
-        boost::asio::async_write(socket_, boost::asio::buffer(write_msgs_.front()),
-            boost::asio::bind_executor(write_strand_,
-                [this, self = shared_from_this()](const boost::system::error_code& ec, std::size_t) {
-                    if (!ec) {
-                        write_msgs_.pop_front();
-                        if (!write_msgs_.empty()) {
-                            do_write();
-                        }
+    // 비동기 데이터 전송
+    void send(const std::string& message) {
+        // io_context 스레드에서 쓰기 작업을 수행하도록 post
+        boost::asio::post(io_context_, [this, message]() {
+            boost::asio::async_write(socket_, boost::asio::buffer(message),
+                [this](boost::system::error_code ec, std::size_t /*length*/)
+                {
+                    if (ec) {
+                        handle_error(ec, "쓰기");
                     }
+                });
+        });
+    }
 
+    // 소켓 연결 종료
+    void close() {
+        boost::asio::post(io_context_, [this]() {
+            if (socket_.is_open()) {
+                socket_.close();
+            }
+        });
+    }
 
-                    else {
-                         if (ec != boost::asio::error::operation_aborted) {
-                            std::cerr << "[Error] [Client] 전송 오류: " << ec.message() << std::endl;
-                            write_msgs_.clear();
-                         }
+private:
+    // 비동기 연결 시도
+    void do_connect(tcp::resolver::results_type endpoints) {
+        boost::asio::async_connect(socket_, endpoints,
+            [this](const boost::system::error_code& ec, const tcp::endpoint& /*endpoint*/) {
+                if (!ec)
+                {
+
+                    // 연결 성공
+                    if (on_connect)
+                        on_connect();
+                    else
+                        std::cout << "[Info ] [Client] 서버 연결 성공: " << socket_.remote_endpoint() << std::endl;
+
+                    do_read(); // 연결 성공 시 즉시 읽기 시작
+                }
+                else
+                {
+                    // 연결 실패
+                    handle_error(ec, "Connect");
+                }
+            });
+    }
+
+    // 비동기 데이터 읽기
+    void do_read() {
+        socket_.async_read_some(boost::asio::buffer(data_, max_length),
+            [this](boost::system::error_code ec, std::size_t length)
+            {
+                if (!ec) {
+                    // 읽기 성공
+                    if (on_receive) {
+                        on_receive(std::string(data_, length));
                     }
-                })
-            );
+                    do_read();
+                }
+                else if (ec == boost::asio::error::eof) {
+                    // 서버가 정상적으로 연결 종료
+                    std::cout << "[Info ] [Client] 서버와 연결 종료됨." << std::endl;
+                    if (on_disconnect) {
+                        on_disconnect();
+                    }
+                }
+                else {
+                    // 읽기 오류
+                    if (ec.value() != boost::asio::error::operation_aborted) {
+                         handle_error(ec, "읽기");
+                    }
+                }
+            });
+    }
+
+    // 공용 에러 핸들러
+    void handle_error(const boost::system::error_code& ec, const std::string& context) {
+        if (on_error) {
+            on_error(ec);
+        } else {
+            std::cerr << "[Error] [Client] " << context << " 오류: " << ec.message() << std::endl;
+        }
     }
 
 
-    std::string host_;
-    std::string port_;
+
     boost::asio::io_context io_context_;
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
+    std::thread io_thread_;
     tcp::socket socket_;
     tcp::resolver resolver_;
-    std::thread io_thread_;
 
-    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
-
-    std::vector<char> buffer_{std::vector<char>(4096)};
-    boost::asio::strand<boost::asio::io_context::executor_type> write_strand_;
-    std::deque<std::string> write_msgs_;
-    std::atomic<bool> _running;
+    enum { max_length = 1024 }; // 서버와 동일하게 설정
+    char data_[max_length];
 };
-
-
-
-/*
-void on_message_handler(const std::vector<char>& msg) {
-    std::cout << "[Info ] [Client] 메세지 수신: " << std::string(msg.begin(), msg.end()) << std::endl;
-}
-
-void on_disconnect_handler() {
-    std::cout << "[Info ] [Client] 서버와 연결 끊어짐" << std::endl;
-}
-
-#include "lib/socket_client.hpp"
-
-int main() {
-    auto client = std::make_shared<SocketClient>("127.0.0.1", 5000);
-
-    client->on_message = on_message_handler;
-    client->on_disconnect = on_disconnect_handler;
-    client->on_connect = [](){
-        // 연결 성공 시 호출될 콜백 (선택적)
-    };
-
-    // connect 함수 호출, 성공/실패 결과가 나올 때까지 여기서 블로킹됨
-    if (client->connect()) {
-
-        try {
-            for (std::string line; std::getline(std::cin, line);) {
-                if (line == "quit" || line == "exit") {
-                    break;
-                }
-                client->send(line);
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "오류 발생: " << e.what() << std::endl;
-        }
-
-    } else {
-        return 1;
-    }
-
-    client->disconnect();
-    return 0;
-}
- */
