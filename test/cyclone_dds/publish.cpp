@@ -3,6 +3,7 @@
 #include <thread>
 
 #include "../../lib/dds_publisher.hpp"
+#include "../../lib/dds_qos.hpp"
 #include "PingData.h"
 
 long long getTimeStamp_ms() {
@@ -14,6 +15,7 @@ long long getTimeStamp_ms() {
 
 int main() {
     std::cout << "Hello, Publisher Example!" << std::endl;
+
 
     // 퍼블리셔 생성
     Publisher<PingData_Msg> publisher("PingTopic", &PingData_Msg_desc); // 토픽 생성
