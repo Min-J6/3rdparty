@@ -1,4 +1,4 @@
-#include "../../lib/SocketClient.hpp"
+#include "SocketClient.hpp"
 #include <sstream>
 #include <iomanip>
 
@@ -16,43 +16,67 @@ std::string bytesToHexString(const std::vector<char>& data) {
     return ss.str();
 }
 
+
+// ----------------------------------------------
+// 클라이언트 메시지 수신시 호출되는 콜백
+// ----------------------------------------------
 void on_message_handler(const std::vector<char>& message) {
     // std::cout << "[Info ] [Client] 받음: " << bytesToHexString(message) << std::endl;
     std::cout << "[Info ] [Client] 받음: " << std::string(message.begin(), message.end());
 }
 
+
+// ----------------------------------------------
+// 클라이언트 연결 끊기시 호출되는 콜백
+// ----------------------------------------------
 void on_disconnect_handler() {
     std::cout << "[Info ] [Client] 서버와 연결 끊어짐" << std::endl;
 }
 
+
+// ----------------------------------------------
+// 클라이언트 연결시 호출되는 콜백
+// ----------------------------------------------
 void on_connect_handler()
 {
     std::cout << "[Info ] [Client] 서버와 연결됨" << std::endl;
 }
 
+
+
 int main(){
+// ----------------------------------------------
+//  | 클라이언트 생성
+// ----------------------------------------------
     Client client;
 
-    client.on_receive = on_message_handler;
-    client.on_disconnect = on_disconnect_handler;
-    client.on_connect = on_connect_handler;
 
+
+// ----------------------------------------------
+//  | 클라이언트 콜백 등록 후 연결
+// ----------------------------------------------
+    client.on_receive    = on_message_handler;
+    client.on_disconnect = on_disconnect_handler;
+    client.on_connect    = on_connect_handler;
 
     client.connect("127.0.0.1", 5000);
 
-    try {
-        for (std::string line; std::getline(std::cin, line);) {
-            if (line == "quit" || line == "exit") {
-                break;
-            }
-            line.push_back('\n');
-            client.send(line);
+
+// ----------------------------------------------
+//  | 터미널에서 입력받아서 서버로 전송
+// ----------------------------------------------
+    for (std::string line; std::getline(std::cin, line);) {
+        if (line == "quit" || line == "exit") {
+            break;
         }
-    } catch (const std::exception& e) {
-        std::cerr << "오류 발생: " << e.what() << std::endl;
+        line.push_back('\n');
+        client.send(line);
     }
 
 
+// ----------------------------------------------
+//  | 클라이언트 연결 종료
+// ----------------------------------------------
     client.close();
     return 0;
 }

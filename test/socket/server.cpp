@@ -1,4 +1,4 @@
-#include "../../lib/SocketServer.hpp"
+#include "SocketServer.hpp"
 #include <sstream>
 #include <iomanip>
 
@@ -17,49 +17,70 @@ std::string bytesToHexString(const std::vector<char>& data) {
 }
 
 
+// ----------------------------------------------ㄴ
+// 세션 수신 콜백
+// ----------------------------------------------
+void receive_callback(std::shared_ptr<Session> s, const std::vector<char>& data)
+{
+    std::string message(data.begin(), data.end());
+
+    auto msg = bytesToHexString(data);
+    std::cout << "[Info ] [Session] "
+              << s->socket().remote_endpoint()
+              << ": " << msg << std::endl;
+
+    // 에코
+    s->send(data);
+}
+
+
+// ----------------------------------------------
+// 세션 에러 콜백
+// ----------------------------------------------
+void error_callback(std::shared_ptr<Session> session, const boost::system::error_code& ec)
+{
+    std::cerr << "[Error] [Session] "
+              << session->socket().remote_endpoint()
+              << " 에러: " << ec.message() << std::endl;
+}
+
+
+// ----------------------------------------------
+// 서버 에러 콜백
+// ----------------------------------------------
+void error_server_callback(const boost::system::error_code& ec)
+{
+    std::cout << "[Info ] [Server] 종료" << std::endl;
+}
+
+
+
+
+
 int main() {
-    try
+
+// ----------------------------------------------
+//  | 서버 생성
+// ----------------------------------------------
+    Server server(5000);
+
+
+// ----------------------------------------------
+//  | 클라이언트 연결시 호출되는 콜백 등록
+// ----------------------------------------------
+    server.on_accept = [](std::shared_ptr<Session> session)
     {
-        Server server(5000);
+        // 환영 메시지 전송
+        session->send("서버 연결 성공\n");
+        session->on_receive = receive_callback;  // 세션 수신 콜백
+        session->on_error   = error_callback;    // 세션 에러 콜백
 
-        // 새 클라이언트가 연결될 때마다 호출됨
-        server.on_accept = [](std::shared_ptr<Session> session)
-        {
-            // 환영 메시지 전송
-            session->send("서버 연결 성공\n");
+    };
 
-            // 세션 수신 콜백
-            session->on_receive = [](std::shared_ptr<Session> s, const std::vector<char>& data)
-            {
-                std::string message(data.begin(), data.end());
+    server.on_error = error_server_callback;     // 서버 에러 콜백
 
-                auto msg = bytesToHexString(data);
-                std::cout << "[Info ] [Session] " << s->socket().remote_endpoint() << ": " << msg << std::endl;
 
-                // 에코
-                s->send(data);
-            };
 
-            // 세션 에러 콜백
-            session->on_error = [](std::shared_ptr<Session> s, const boost::system::error_code& ec)
-            {
-
-                std::cerr << "[Error] [Session]" << s->socket().remote_endpoint() << "세션 에러: " <<  ec.message() << std::endl;
-
-            };
-        };
-
-        server.on_error = [](const boost::system::error_code& ec)
-        {
-            std::cerr << "[Error] [Server] Accept 에러: " << ec.message() << std::endl;
-        };
-
-        server.run();
-    }
-    catch (const std::exception& e)
-    {
-        std::cerr << "예외 발생: " << e.what() << std::endl;
-    }
-
+    server.run(); // 블락됨
     return 0;
 }
