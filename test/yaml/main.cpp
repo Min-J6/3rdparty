@@ -1,4 +1,4 @@
-#include "../../lib/yaml.hpp"
+#include "yaml.hpp"
 #include <iostream>
 
 int main()
