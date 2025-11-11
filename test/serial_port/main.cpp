@@ -1,4 +1,4 @@
-#include "../../lib/SerialPort.hpp"
+#include "SerialPort.hpp"
 #include <boost/asio.hpp>
 #include <iostream>
 
@@ -11,6 +11,8 @@ void read_callback(const std::vector<char>& data)
 
 int main()
 {
+    std::cout << "[테스트] Serial Port" << std::endl;
+
     // io_context
     boost::asio::io_context io_context;
     boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard = boost::asio::make_work_guard(io_context);
@@ -19,7 +21,7 @@ int main()
     // 시리얼 포트 객체 생성
     SerialPort serial_port(io_context);
     serial_port.on_receive = read_callback; // Receive Callback 등록
-    serial_port.open("/dev/pts/0", 115200); // 포트 열기
+    serial_port.open("/dev/pts/2", 115200); // 포트 열기
 
 
 
