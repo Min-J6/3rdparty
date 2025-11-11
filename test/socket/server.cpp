@@ -17,7 +17,7 @@ std::string bytesToHexString(const std::vector<char>& data) {
 }
 
 
-// ----------------------------------------------ㄴ
+// ----------------------------------------------
 // 세션 수신 콜백
 // ----------------------------------------------
 void receive_callback(std::shared_ptr<Session> s, const std::vector<char>& data)
@@ -58,6 +58,7 @@ void error_server_callback(const boost::system::error_code& ec)
 
 
 int main() {
+    std::cout << "[테스트] Server 실행" << std::endl;
 
 // ----------------------------------------------
 //  | 서버 생성
