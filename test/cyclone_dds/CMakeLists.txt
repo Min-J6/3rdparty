@@ -8,14 +8,32 @@ idlc_generate(
 )
 
 
-# Publish 예제
+# Publish 테스트
 add_executable(Test_Publish publish.cpp)
 target_link_libraries(Test_Publish
     PUBLIC
         CycloneDDS::ddsc # 외부 라이브러리 링크
         Ping_idl         # IDL 생성 코드 링크
 )
-target_include_directories(Test_Publish PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+
+# 라이브러리 경로
+target_include_directories(Test_Publish
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_SOURCE_DIR}/lib
+)
+
+# 실행 파일(.exe, .out)의 출력 디렉토리 설정
+set_target_properties(Test_Publish
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+
+
+
+
+
 
 
 # Subscribe 예제
@@ -25,4 +43,16 @@ target_link_libraries(Test_Subscribe
         CycloneDDS::ddsc # 외부 라이브러리 링크
         Ping_idl         # IDL 생성 코드 링크
 )
-target_include_directories(Test_Subscribe PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+
+# 라이브러리 경로
+target_include_directories(Test_Subscribe
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_SOURCE_DIR}/lib
+)
+
+# 실행 파일(.exe, .out)의 출력 디렉토리 설정
+set_target_properties(Test_Subscribe
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
