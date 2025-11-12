@@ -29,7 +29,7 @@ public:
             try {
                 io_context_.run();
             } catch (std::exception& e) {
-                print("[Error] [Client] IO 스레드 예외 발생: " + std::string(e.what()));
+                backlog("[Client] IO 스레드 예외 발생: " + std::string(e.what()));
             }
         });
     }
@@ -54,9 +54,11 @@ public:
                 [this](const boost::system::error_code& ec, tcp::resolver::results_type endpoints)
                 {
                     if (!ec) {
+                        // 연결 시도
                         do_connect(endpoints);
                     } else {
-                        on_error ? on_error(ec) : print("[Error] [Client] 서버 연결 실패: " + ec.message());
+                        on_error ? on_error(ec)
+                        : backlog("[Client] 서버 연결 실패: " + ec.message());
                     }
                 });
         });
@@ -70,7 +72,8 @@ public:
                 [this](boost::system::error_code ec, std::size_t /*length*/)
                 {
                     if (ec) {
-                        on_error ? on_error(ec) : print("[Error] [Client] 쓰기 오류: " + ec.message());
+                        on_error ? on_error(ec)
+                        : backlog("[Client] 전송 실패: " + ec.message());
                     }
                 });
         });
@@ -84,7 +87,8 @@ public:
                 [this](boost::system::error_code ec, std::size_t /*length*/)
                 {
                     if (ec) {
-                        on_error ? on_error(ec) : print("[Error] [Client] 쓰기 오류: " + ec.message());
+                        on_error ? on_error(ec)
+                        : backlog("[Client] 전송 실패: " + ec.message());
                     }
                 });
         });
@@ -109,12 +113,13 @@ private:
                 if (!ec) {
                     // 서버 연결 성공
 
-                    on_connect ? on_connect() : print("[Info ] [Client] 서버와 연결됨:" + socket_.remote_endpoint().address().to_string());
+                    on_connect ? on_connect()
+                    : backlog("[Client] 서버와 연결됨:" + socket_.remote_endpoint().address().to_string());
 
                     do_read();
                 } else {
                     // 서버 연결 실패
-                    print("[Error] [Client] 서버 연결 실패: " + ec.message());
+                    backlog("[Client] 서버 연결 실패: " + ec.message());
                 }
             });
     }
@@ -131,25 +136,28 @@ private:
                     const char* data_ptr = boost::asio::buffer_cast<const char*>(buffer_.data());
                     std::vector<char> bytes_data(data_ptr, data_ptr + length);
 
-                    on_receive ? on_receive(bytes_data) : print("[Info ] [Client] 데이터 수신: " + std::string(bytes_data.begin(), bytes_data.end()));
+                    on_receive ? on_receive(bytes_data)
+                    : backlog("[Client] 데이터 수신: " + std::string(bytes_data.begin(), bytes_data.end()));
 
                     buffer_.consume(length);
                     do_read();
                 }
                 else if (ec == boost::asio::error::eof) {
                     // 정상 종료됨
-                    on_disconnect ? on_disconnect() : print("[Info ] [Client] 서버와 연결 종료됨");
+                    on_disconnect ? on_disconnect()
+                    : backlog("[Client] 서버와 연결 종료됨");
                 }
                 else if (ec.value() != boost::asio::error::operation_aborted) {
                     // 에러 발생함
-                    on_error ? on_error(ec) : print("[Error] [Client] 읽기 오류: " + ec.message());
+                    on_error ? on_error(ec)
+                    : backlog("[Client] 읽기 실패: " + ec.message());
                 }
             });
     }
 
     // 로그 출력
-    void print(const std::string& message) {
-        std::cout << message << std::endl;
+    void backlog(const std::string& message) {
+        std::cout << "[BackLog] " << message << std::endl;
     }
 
     boost::asio::io_context io_context_;

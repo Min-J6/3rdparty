@@ -24,7 +24,7 @@ public:
     // 서버 시작
     void start() {
 
-        print("[Info ] [Session] 클라이언트 연결됨: " + socket_.remote_endpoint().address().to_string());
+        backlog("[Session] 클라이언트 연결됨: " + socket_.remote_endpoint().address().to_string());
 
         do_read();
     }
@@ -37,7 +37,8 @@ public:
             [this, self](boost::system::error_code ec, std::size_t /*length*/)
             {
                 if (ec) {
-                    on_error ? on_error(self, ec) : print("[Error] [Session] 쓰기 오류: " + ec.message());
+                    on_error ? on_error(self, ec)
+                    : backlog("[Session] 쓰기 오류: " + ec.message());
                 }
             });
     }
@@ -50,11 +51,14 @@ public:
             [this, self](boost::system::error_code ec, std::size_t /*length*/)
             {
                 if (ec) {
-                    on_error ? on_error(self, ec) : print("[Error] [Session] 쓰기 오류: " + ec.message());
+                    on_error ? on_error(self, ec)
+                    : backlog("[Session] 쓰기 오류: " + ec.message());
                 }
             });
     }
 
+
+    // 클라이언트 IP 가져오기
     std::string ip() {
         return socket_.remote_endpoint().address().to_string();
     }
@@ -77,16 +81,18 @@ private:
     void do_read() {
         auto self = shared_from_this();
 
-        // 정규표현식을 구분자로 사용
+        // '\r', '\n', '\r\n'가 나올때까지 읽기
         boost::asio::async_read_until(socket_, buffer_, delimiter_regex_,
             [this, self](boost::system::error_code ec, std::size_t length)
             {
                 if (!ec) {
+                    // 데이터 읽기 성공
                     const char* data_ptr = boost::asio::buffer_cast<const char*>(buffer_.data());
                     std::vector<char> bytes_data(data_ptr, data_ptr + length);
 
 
-                    on_receive ? on_receive(self, bytes_data) : print("[Info ] [Session] 데이터 수신: " + std::string(bytes_data.begin(), bytes_data.end()));
+                    on_receive ? on_receive(self, bytes_data)
+                    : backlog("[Session] 데이터 수신: " + std::string(bytes_data.begin(), bytes_data.end()));
 
 
                     buffer_.consume(length);
@@ -94,18 +100,19 @@ private:
                 }
                 else if (ec == boost::asio::error::eof) {
                     // 정상 종료됨
-                    print("[Info ] [Session] 클라이언트 연결 종료: " + socket_.remote_endpoint().address().to_string());
+                    backlog("[Session] 클라이언트 연결 종료: " + socket_.remote_endpoint().address().to_string());
                 }
                 else {
                     // 에러 발생함
-                    on_error ? on_error(self, ec) : print("[Error] [Session] 읽기 오류: " + ec.message());
+                    on_error ? on_error(self, ec)
+                    : backlog("[Session] 읽기 오류: " + ec.message());
                 }
             });
     }
 
 
     // 로그 출력
-    void print(const std::string& msg) {
+    void backlog(const std::string& msg) {
         std::cout << msg << std::endl;
     }
 
@@ -125,7 +132,7 @@ public:
 
     Server(short port) : acceptor_(io_context_, tcp::endpoint(tcp::v4(), port)) {
 
-        print("[Info ] [Server] 서버 포트 열림: " + std::to_string(port));
+        backlog("[Server] 서버 포트 열림: " + std::to_string(port));
 
         do_accept();
     }
@@ -146,13 +153,15 @@ private:
             {
                 if (ec) {
                     // 연결 실패
-                    on_error ? on_error(ec) : print("[Error] [Server] Accept 에러: " + ec.message());
+                    on_error ? on_error(ec)
+                    : backlog("[Server] Accept 에러: " + ec.message());
                 }
                 else {
                     // 연결 성공
                     new_session->start();
 
-                    on_accept ? on_accept(new_session) : print("[Info ] [Server] 클라이언트 연결됨: " + new_session->socket().remote_endpoint().address().to_string());
+                    on_accept ? on_accept(new_session)
+                    : backlog("[Server] 클라이언트 연결됨: " + new_session->socket().remote_endpoint().address().to_string());
                 }
 
                 do_accept();
@@ -161,8 +170,8 @@ private:
 
 
     // 로그 출력
-    void print(const std::string& msg) {
-        std::cout << msg << std::endl;
+    void backlog(const std::string& msg) {
+        std::cout << "[BackLog] " << msg << std::endl;
     }
 
     boost::asio::io_context io_context_;
