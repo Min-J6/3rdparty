@@ -12,7 +12,7 @@ using boost::asio::ip::tcp;
 
 class Session : public std::enable_shared_from_this<Session> {
 public:
-    using Callback_receive = std::function<void(std::shared_ptr<Session>, const std::string&)>;
+    using Callback_receive = std::function<void(std::shared_ptr<Session>, const std::vector<char>&)>;
     using Callback_error = std::function<void(std::shared_ptr<Session>, const boost::system::error_code&)>;
 
 
