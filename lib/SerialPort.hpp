@@ -50,6 +50,10 @@ public:
 
     // --- 유틸리티 --- //
     static std::vector<std::string> get_port_list();                // 포트 목록 가져오기
+    void backlog(const std::string &log)
+    {
+        std::cout << "[Backlog] [Serial] " << log << std::endl;
+    }
 
 
 private:
@@ -59,12 +63,6 @@ private:
 
     // 비동기  데이터 쓰기
     void do_write();
-
-
-    // 로그 출력
-    void backlog(const std::string &log) {
-        std::cout << "[Backlog] [Serial] " << log << std::endl;
-    }
 
 
     boost::asio::io_context& ioContext_;
