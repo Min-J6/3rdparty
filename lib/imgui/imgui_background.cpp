@@ -17,7 +17,8 @@
 #include "icon.cpp"
 
 #include "ImNotification.h"
-
+#include "implot.h"
+#include "implot3d.h"
 
 // 윈도우 크기
 std::string TITLE               = "DEMO";
@@ -156,6 +157,8 @@ bool ImGuiBackground::init() {
     // ImGui 초기화
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImPlot::CreateContext();
+    ImPlot3D::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -392,6 +395,8 @@ bool ImGuiBackground::run() {
     // ImGui 정리
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
+    ImPlot3D::DestroyContext();
+    ImPlot::DestroyContext();
     ImGui::DestroyContext();
 
 

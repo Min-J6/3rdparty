@@ -15,6 +15,11 @@ add_library(imgui
     imgui_demo.cpp
     ImCoolBar.cpp
     ImNotification.cpp
+    implot_items.cpp
+    implot.cpp
+    implot3d.cpp
+    implot3d_items.cpp
+    implot3d_meshes.cpp
     backends/imgui_impl_glfw.cpp
     backends/imgui_impl_opengl3.cpp
 )
