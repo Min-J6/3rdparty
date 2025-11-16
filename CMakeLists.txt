@@ -16,6 +16,7 @@ add_subdirectory(lib/CycloneDDS)
 
 
 
+
 add_executable(main
     main.cpp
 )
@@ -24,5 +25,12 @@ add_executable(main
 target_link_libraries(main PRIVATE imgui Eigen3::Eigen)
 
 
+# Lapack
+find_package(LAPACK REQUIRED)
+target_link_libraries(main PRIVATE ${LAPACK_LIBRARIES})
+
+# Blas
+find_package(BLAS REQUIRED)
+target_link_libraries(main PRIVATE ${BLAS_LIBRARIES})
 
 add_subdirectory(test)

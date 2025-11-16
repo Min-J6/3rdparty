@@ -1,14 +1,15 @@
-#include <implot.h>
-#include <implot3d.h>
-#include <iostream>
-
+#include "common_types.h"
 #include "imgui.h"
-#include "lib/transform.h"
+#include "implot3d.h"
+#include "transform.h"
+
+#include <iostream>
+#include <cmath>
 
 
 
 
-
+// 두산 M1013 링크 길이
 const double l1 = 0.135;    // [m]
 const double l2 = 0.1702;   // [m]
 const double l3 = 0.411;    // [m]
@@ -20,133 +21,12 @@ const double l8 = 0.121;    // [m]
 
 
 
-// ===================================================================
-// 2. AxisObject 클래스 (ImPlot3D 렌더링 객체)
-// ===================================================================
-class AxisObject
-{
-public:
-    float axisLength;
-
-
-    AxisObject(float length = 1.0f) : axisLength(length)
-    {
-        // 기본값: 원점(0,0,0), 회전 없음
-        origin[0] = 0.0f; origin[1] = 0.0f; origin[2] = 0.0f;
-        endX[0] = length; endX[1] = 0.0f; endX[2] = 0.0f;
-        endY[0] = 0.0f; endY[1] = length; endY[2] = 0.0f;
-        endZ[0] = 0.0f; endZ[1] = 0.0f; endZ[2] = length;
-    }
-
-
-    void setTransform(const transform& tf)
-    {
-        // Eigen::Matrix4d (double, Column-Major)의 데이터 포인터
-        const double* m = tf.matrix().data();
-
-        // 1. 위치 (Translation) - m[12], m[13], m[14]
-        origin[0] = static_cast<float>(m[12]);
-        origin[1] = static_cast<float>(m[13]);
-        origin[2] = static_cast<float>(m[14]);
-
-        // 2. 회전 (Rotation) - 1, 2, 3번째 열
-        // 끝점 = 원점 + (방향 * 길이)
-
-        // X축 끝점
-        endX[0] = origin[0] + static_cast<float>(m[0]) * axisLength;
-        endX[1] = origin[1] + static_cast<float>(m[1]) * axisLength;
-        endX[2] = origin[2] + static_cast<float>(m[2]) * axisLength;
-
-        // Y축 끝점
-        endY[0] = origin[0] + static_cast<float>(m[4]) * axisLength;
-        endY[1] = origin[1] + static_cast<float>(m[5]) * axisLength;
-        endY[2] = origin[2] + static_cast<float>(m[6]) * axisLength;
-
-        // Z축 끝점
-        endZ[0] = origin[0] + static_cast<float>(m[8]) * axisLength;
-        endZ[1] = origin[1] + static_cast<float>(m[9]) * axisLength;
-        endZ[2] = origin[2] + static_cast<float>(m[10]) * axisLength;
-    }
-
-
-
-    AxisObject& operator=(const transform& tf)
-    {
-        this->setTransform(tf);
-        return *this;
-    }
-
-
-    void Draw() const
-    {
-        float line_x[2], line_y[2], line_z[2];
-
-        // --- X축 (빨간색) ---
-        line_x[0] = origin[0]; line_y[0] = origin[1]; line_z[0] = origin[2];
-        line_x[1] = endX[0];   line_y[1] = endX[1];   line_z[1] = endX[2];
-
-        ImPlot3D::PushStyleColor(ImPlot3DCol_Line, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
-        ImPlot3D::PlotLine("X-Axis", line_x, line_y, line_z, 2);
-        ImPlot3D::PopStyleColor();
-
-        // --- Y축 (녹색) ---
-        line_x[0] = origin[0]; line_y[0] = origin[1]; line_z[0] = origin[2];
-        line_x[1] = endY[0];   line_y[1] = endY[1];   line_z[1] = endY[2];
-
-        ImPlot3D::PushStyleColor(ImPlot3DCol_Line, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
-        ImPlot3D::PlotLine("Y-Axis", line_x, line_y, line_z, 2);
-        ImPlot3D::PopStyleColor();
-
-        // --- Z축 (파란색) ---
-        line_x[0] = origin[0]; line_y[0] = origin[1]; line_z[0] = origin[2];
-        line_x[1] = endZ[0];   line_y[1] = endZ[1];   line_z[1] = endZ[2];
-
-        ImPlot3D::PushStyleColor(ImPlot3DCol_Line, ImVec4(0.0f, 0.0f, 1.0f, 1.0f));
-        ImPlot3D::PlotLine("Z-Axis", line_x, line_y, line_z, 2);
-        ImPlot3D::PopStyleColor();
-    }
-
-    // 원점 좌표를 반환하는 함수 추가
-    void GetOrigin(float& x, float& y, float& z) const
-    {
-        x = origin[0];
-        y = origin[1];
-        z = origin[2];
-    }
-
-private:
-    float origin[3]; // 축의 원점 (X, Y, Z)
-    float endX[3];   // X축의 끝점 (X, Y, Z)
-    float endY[3];   // Y축의 끝점 (X, Y, Z)
-    float endZ[3];   // Z축의 끝점 (X, Y, Z)
-};
-
-
-// ===================================================================
-// 3. 링크선 그리기 함수 (노란색)
-// ===================================================================
-void DrawLinkLine(const AxisObject& from, const AxisObject& to)
-{
-    float from_x, from_y, from_z;
-    float to_x, to_y, to_z;
-
-    from.GetOrigin(from_x, from_y, from_z);
-    to.GetOrigin(to_x, to_y, to_z);
-
-    float line_x[2] = {from_x, to_x};
-    float line_y[2] = {from_y, to_y};
-    float line_z[2] = {from_z, to_z};
-
-    // 노란색으로 링크선 그리기
-    ImPlot3D::PushStyleColor(ImPlot3DCol_Line, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
-    ImPlot3D::PlotLine("Link", line_x, line_y, line_z, 2);
-    ImPlot3D::PopStyleColor();
-}
 
 
 
 
 
+// 두산 M1013 Jacobian 함수 [rad]
 transform::mat<12, 6> Jcobian(float q0, float q1, float q2, float q3, float q4, float q5)
 {
     static transform::mat<12, 6> J = transform::mat<12, 6>::Zero();
@@ -244,7 +124,7 @@ transform::mat<12, 6> Jcobian(float q0, float q1, float q2, float q3, float q4, 
 
 
 
-
+// Manipulability Ellipsoid 그리기
 void draw_manipulabilityEllipsoid(const transform::mat<3, 6>& J_position,
                                  const transform::vec3& center,
                                  float scale = 1.0f,
@@ -306,6 +186,9 @@ void draw_manipulabilityEllipsoid(const transform::mat<3, 6>& J_position,
     // 와이어프레임으로 그리기
     ImPlot3D::PushStyleColor(ImPlot3DCol_Line, color);
 
+    // 레전드 끄기
+    
+
 
     // 위도선 그리기
     for (int i = 0; i <= lat_segments; ++i) {
@@ -338,9 +221,12 @@ void draw_manipulabilityEllipsoid(const transform::mat<3, 6>& J_position,
 
 
 int main() {
-    std::cout << "Hello, World!" << std::endl;
+    std::cout << "두산 로봇 M1013 IK 테스트 실행..." << std::endl;
 
-    AxisObject origine(0.01);
+// --------------------------------------
+// 3D 축 객체
+// --------------------------------------
+    AxisObject origine(0.1);
     AxisObject base(0.05);
     AxisObject joint1(0.05);
     AxisObject joint2(0.05);
@@ -348,10 +234,12 @@ int main() {
     AxisObject joint4(0.05);
     AxisObject joint5(0.05);
     AxisObject joint6(0.05);
-    AxisObject endEffector(0.05);
+    AxisObject endEffector(0.06);
 
 
-
+// --------------------------------------
+// 로봇 링크 TF
+// --------------------------------------
     transform base_tf;
     transform joint1_tf;
     transform joint2_tf;
@@ -362,24 +250,31 @@ int main() {
     transform endEffector_tf;
 
 
-    float q0 = 0.0;
-    float q1 = 0.0;
-    float q2 = 0.0;
-    float q3 = 0.0;
-    float q4 = 0.0;
-    float q5 = 0.0;
-
-
-
-
-
-
-    transform::vec3 tPos(0.2, 0.0, 0.379); // [m]
-    transform::quat qRot(transform::AngleAxis(DEG_TO_RAD(0), transform::vec3(0, 0, 1)));
+// --------------------------------------
+// Target Transform 생성
+// --------------------------------------
+    transform::vec3 tPos(0.62, 0.0, 0.235); // [m]
+    transform::quat qRot(transform::AngleAxis(DEG_TO_RAD(0), transform::vec3(0, 1, 0)));//
 
     transform target_tf(qRot, tPos);
 
 
+// --------------------------------------
+// 로봇 Joint, Target TF 설정
+// --------------------------------------
+    float q0 = 0.0;
+    float q1 = 0.0;
+    float q2 = -1.0;
+    float q3 = 0.0;
+    float q4 = 0.0;
+    float q5 = 0.0;
+
+    float target_x      = target_tf.x();
+    float target_y      = target_tf.y();
+    float target_z      = target_tf.z();
+    float target_roll   = RAD_TO_DEG(target_tf.roll());
+    float target_pitch  = RAD_TO_DEG(target_tf.pitch());
+    float target_yaw    = RAD_TO_DEG(target_tf.yaw());
 
 
 
@@ -388,46 +283,58 @@ int main() {
 
     while (ImGui::isRunning())
     {
-
-
-
         ImGui::draw([&]()
         {
             ImGui::Begin("Draw");
-            ImGui::DragFloat("joint1", &q0, 0.1f, -360.0f, 360.0f);
-            ImGui::DragFloat("joint2", &q1, 0.1f, -360.0f, 360.0f);
-            ImGui::DragFloat("joint3", &q2, 0.1f, -150.0f, 150.0f);
-            ImGui::DragFloat("joint4", &q3, 0.1f, -360.0f, 360.0f);
-            ImGui::DragFloat("joint5", &q4, 0.1f, -360.0f, 360.0f);
-            ImGui::DragFloat("joint6", &q5, 0.1f, -360.0f, 360.0f);
+            ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+
+
+// --------------------------------------
+//          | Joint 각도 조절 슬라이더
+// --------------------------------------
+            ImGui::Text("Joint 설정");
+            ImGui::DragFloat("##joint1", &q0, 0.1f, -360.0f, 360.0f, "J1: %.3f deg");
+            ImGui::DragFloat("##joint2", &q1, 0.1f, -360.0f, 360.0f, "J2: %.3f deg");
+            ImGui::DragFloat("##joint3", &q2, 0.1f, -150.0f, 150.0f, "J3: %.3f deg");
+            ImGui::DragFloat("##joint4", &q3, 0.1f, -360.0f, 360.0f, "J4: %.3f deg");
+            ImGui::DragFloat("##joint5", &q4, 0.1f, -360.0f, 360.0f, "J5: %.3f deg");
+            ImGui::DragFloat("##joint6", &q5, 0.1f, -360.0f, 360.0f, "J6: %.3f deg");
 
             ImGui::Dummy(ImVec2(0, 20));
 
-            //Target Transform
-            static float target_x = tPos.x();
-            static float target_y = tPos.y();
-            static float target_z = tPos.z();
-            static float target_roll = 0.0f;
-            static float target_pitch = 90.0f;
-            static float target_yaw = 0.0f;
 
-            ImGui::DragFloat("Target x", &target_x, 0.01f, -1.0f, 1.0f);
-            ImGui::DragFloat("Target y", &target_y, 0.01f, -1.0f, 1.0f);
-            ImGui::DragFloat("Target z", &target_z, 0.001f, -1.0f, 2.0f);
+// --------------------------------------
+//          | Target Transform 설정 슬라이더
+// --------------------------------------
+            ImGui::Text("Target Transform 설정");
+            ImGui::DragFloat("##Target x", &target_x, 0.01f, -1.0f, 1.0f, "x: %.3f");
+            ImGui::DragFloat("##Target y", &target_y, 0.01f, -1.0f, 1.0f, "y: %.3f");
+            ImGui::DragFloat("##Target z", &target_z, 0.001f, -1.0f, 2.0f, "z: %.3f");
 
             ImGui::Dummy(ImVec2(0, 10));
-            ImGui::DragFloat("Target Roll", &target_roll, 1.0f, -180.0f, 180.0f);
-            ImGui::DragFloat("Target Pitch", &target_pitch, 1.0f, -130.0f, 130.0f);
-            ImGui::DragFloat("Target Yaw", &target_yaw, 1.0f, -180.0f, 180.0f);
+
+            ImGui::DragFloat("##Target Roll", &target_roll, 1.0f, -180.0f, 180.0f, "Roll: %.3f");
+            ImGui::DragFloat("##Target Pitch", &target_pitch, 1.0f, -130.0f, 130.0f, "Pitch: %.3f");
+            ImGui::DragFloat("##Target Yaw", &target_yaw, 1.0f, -180.0f, 180.0f, "Yaw: %.3f");
+
+            ImGui::PopItemWidth();
 
 
-            // Target Transform
-            transform::quat target_qRot(transform::AngleAxis(DEG_TO_RAD(target_yaw), transform::vec3::UnitZ()) *
-                                        transform::AngleAxis(DEG_TO_RAD(target_pitch + 90), transform::vec3::UnitY()) *
-                                        transform::AngleAxis(DEG_TO_RAD(target_roll), transform::vec3::UnitZ()));
+// --------------------------------------
+//          | Target Transform 계산
+//          | ZYZ Euler 회전 사용
+// --------------------------------------
+            transform::quat target_qRot(transform::AngleAxis(DEG_TO_RAD(target_yaw), transform::vec3::UnitZ()) *        // Z
+                                        transform::AngleAxis(DEG_TO_RAD(target_pitch + 90), transform::vec3::UnitY()) * // Y ( +90 ) 주의
+                                        transform::AngleAxis(DEG_TO_RAD(target_roll), transform::vec3::UnitZ()));       // Z
             target_tf = transform(target_qRot, transform::vec3(target_x, target_y, target_z));
 
 
+
+
+// --------------------------------------
+//          | 각 Joint TF 계산
+// --------------------------------------
             // Joint1: base 좌표계 기준
             transform::vec3 pos1(0, 0, l1);
             transform::quat rot1(transform::AngleAxis(DEG_TO_RAD(q0), transform::vec3::UnitZ()));
@@ -465,6 +372,9 @@ int main() {
 
 
 
+// --------------------------------------
+//          | FK ( Forward Kinematics )
+// --------------------------------------
             transform final_tf1   = tf1;
             transform final_tf2   = final_tf1 * tf2;
             transform final_tf3   = final_tf2 * tf3;
@@ -472,6 +382,8 @@ int main() {
             transform final_tf5   = final_tf4 * tf5;
             transform final_tf6   = final_tf5 * tf6;
             transform final_tf_ee = final_tf6 * tf_ee;
+
+            transform fk = final_tf_ee;
 
             // AxisObject에 최종 변환 적용
             joint1.setTransform(final_tf1);
@@ -484,11 +396,13 @@ int main() {
 
 
 
-            // IK
-            transform fk = final_tf_ee;
 
+// --------------------------------------
+//          | IK ( Inverse Kinematics )
+// --------------------------------------
+
+            // Transform 오차 계산
             transform error = target_tf - fk;
-
             transform::vec<12> dx;
             dx <<   error(0, 3),
                     error(1, 3),
@@ -504,6 +418,7 @@ int main() {
                     error(2, 2);
 
 
+            // Jacobian
             transform::mat<12,6> j = Jcobian(DEG_TO_RAD(q0),
                                              DEG_TO_RAD(q1),
                                              DEG_TO_RAD(q2),
@@ -513,6 +428,9 @@ int main() {
 
             transform::mat<6, 12> j_inv = jInv(j);
 
+
+
+            // 각도 업데이트
             transform::vec<6> dq;
             dq = j_inv * dx * 0.1;
 
@@ -539,8 +457,16 @@ int main() {
             float yaw = fk.yaw();
             ImGui::Text("roll: %.3f, pitch: %.3f, yaw: %.3f", RAD_TO_DEG(roll), RAD_TO_DEG(pitch), RAD_TO_DEG(yaw));
 
-            if (ImPlot3D::BeginPlot("Axis Plot", ImVec2(-1, -1), ImPlot3DFlags_Equal))
+
+            ImGui::End();
+
+
+            ImGui::Begin("시각화");
+            if (ImPlot3D::BeginPlot("로봇 FK/IK 시각화", ImVec2(-1, -1), ImPlot3DFlags_Equal | ImPlot3DFlags_NoLegend))
             {
+                ImPlot3D::SetupAxesLimits(-1.3, 1.3, -1.3, 1.3, 0.0, 1.3, ImPlot3DCond_Always);
+                ImPlot3D::SetupAxes("X", "Y", "Z");
+
                 // 축 그리기
                 origine.Draw();
                 base.Draw();
@@ -564,12 +490,13 @@ int main() {
 
                 // Manipulability ellipsoid 그리기
                 transform::mat<3, 6> j_position_final = j.block<3, 6>(0, 0);
-                draw_manipulabilityEllipsoid(j_position_final, fk.translation(), 0.5f, ImVec4(0.0f, 1.0f, 1.0f, 0.1f));
+                draw_manipulabilityEllipsoid(j_position_final, fk.translation(), 0.3f, ImVec4(0.0f, 1.0f, 1.0f, 0.1f));
 
 
                 ImPlot3D::EndPlot();
+
+                ImGui::End();
             }
-            ImGui::End();
 
         });
     }
