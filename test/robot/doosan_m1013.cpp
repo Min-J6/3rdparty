@@ -9,6 +9,19 @@
 
 
 
+#include <vector>
+#include <string>
+#include <stdexcept>
+#include <iostream>
+
+
+
+
+
+
+
+
+
 // 두산 M1013 링크 길이
 const double l1 = 0.135;    // [m]
 const double l2 = 0.1702;   // [m]
@@ -187,7 +200,7 @@ void draw_manipulabilityEllipsoid(const transform::mat<3, 6>& J_position,
     ImPlot3D::PushStyleColor(ImPlot3DCol_Line, color);
 
     // 레전드 끄기
-    
+
 
 
     // 위도선 그리기
@@ -262,12 +275,12 @@ int main() {
 // --------------------------------------
 // 로봇 Joint, Target TF 설정
 // --------------------------------------
-    float q0 = 0.0;
-    float q1 = 0.0;
+    float q0 = -1.0;
+    float q1 = -1.0;
     float q2 = -1.0;
-    float q3 = 0.0;
-    float q4 = 0.0;
-    float q5 = 0.0;
+    float q3 = -1.0;
+    float q4 = -1.0;
+    float q5 = -1.0;
 
     float target_x      = target_tf.x();
     float target_y      = target_tf.y();
@@ -279,12 +292,37 @@ int main() {
 
 
 
+    // 관절 한계 설정
+    JointLimits limits(6);
+    limits.setLimit(0, DEG_TO_RAD(-360), DEG_TO_RAD(360));
+    limits.setLimit(1, DEG_TO_RAD(-360),  DEG_TO_RAD(360));
+    limits.setLimit(2, DEG_TO_RAD(-150), DEG_TO_RAD(150));
+    limits.setLimit(3, DEG_TO_RAD(-360), DEG_TO_RAD(360));
+    limits.setLimit(4, DEG_TO_RAD(-360), DEG_TO_RAD(360));
+    limits.setLimit(5, DEG_TO_RAD(-360), DEG_TO_RAD(360));
+
+
+    int method_idx = 3;  // 0=없음, 1=단순클램핑, 2=부드러운클램핑, 3=반발력, 4=조합(권장)
+    float activation_ratio = 0.02f;
+    float repulsive_gain = 0.005f;
+
+    const char* method_names[] = {
+        "없음 (No Constraint)",
+        "단순 클램핑 (Simple Clamp)",
+        "부드러운 클램핑 (Soft Clamp)",
+        "반발력 (Repulsive)",
+        "조합 (Soft+Repulsive, 권장)"
+    };
+
+
+
     ImGui::start("데모");
 
     while (ImGui::isRunning())
     {
         ImGui::draw([&]()
         {
+
             ImGui::Begin("Draw");
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
 
@@ -318,6 +356,18 @@ int main() {
             ImGui::DragFloat("##Target Yaw", &target_yaw, 1.0f, -180.0f, 180.0f, "Yaw: %.3f");
 
             ImGui::PopItemWidth();
+
+
+            ImGui::Text("관절 한계 제약 방법 (검증됨)");
+           ImGui::Combo("##method", &method_idx, method_names, 5);
+
+           if (method_idx >= 2) {
+               ImGui::DragFloat("##activation", &activation_ratio, 0.001f, 0.001f, 0.2f, "활성화 비율: %.3f");
+           }
+           if (method_idx == 3 || method_idx == 4) {
+               ImGui::DragFloat("##repulsive", &repulsive_gain, 0.001f, 0.001f, 0.2f, "반발력 게인: %.3f");
+           }
+
 
 
 // --------------------------------------
@@ -426,7 +476,7 @@ int main() {
                                              DEG_TO_RAD(q4),
                                              DEG_TO_RAD(q5));
 
-            transform::mat<6, 12> j_inv = jInv(j);
+            transform::mat<6, 12> j_inv = jInv_SVD_Damped(j, 0.1);
 
 
 
@@ -435,14 +485,29 @@ int main() {
             dq = j_inv * dx * 0.1;
 
 
-            q0 += NORM_DEG_180(RAD_TO_DEG(dq(0)));
-            q1 += NORM_DEG_180(RAD_TO_DEG(dq(1)));
-            q2 += NORM_DEG_180(RAD_TO_DEG(dq(2)));
-            q3 += NORM_DEG_180(RAD_TO_DEG(dq(3)));
-            q4 += NORM_DEG_180(RAD_TO_DEG(dq(4)));
-            q5 += NORM_DEG_180(RAD_TO_DEG(dq(5)));
+            transform::vec<6> q_current;
+            q_current << DEG_TO_RAD(q0), DEG_TO_RAD(q1), DEG_TO_RAD(q2),
+                        DEG_TO_RAD(q3), DEG_TO_RAD(q4), DEG_TO_RAD(q5);
+
+            JointLimitMethod method = static_cast<JointLimitMethod>(method_idx);
+            applyJointLimitConstraint(dq, q_current, limits, method, activation_ratio, repulsive_gain);
 
 
+            q0 +=RAD_TO_DEG(dq(0));
+            q1 +=RAD_TO_DEG(dq(1));
+            q2 +=RAD_TO_DEG(dq(2));
+            q3 +=RAD_TO_DEG(dq(3));
+            q4 +=RAD_TO_DEG(dq(4));
+            q5 +=RAD_TO_DEG(dq(5));
+
+
+
+            q0 = NORM_DEG_180(q0);
+            q1 = NORM_DEG_180(q1);
+            q2 = NORM_DEG_180(q2);
+            q3 = NORM_DEG_180(q3);
+            q4 = NORM_DEG_180(q4);
+            q5 = NORM_DEG_180(q5);
 
 
 
