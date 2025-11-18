@@ -19,6 +19,12 @@
 #define RAD_TO_DEG(x) ((x) * 57.29577951308232087679815481410518)
 #endif
 
+extern "C"{
+    extern void dgesvd_(char* jobu, char* jobvt, int* m, int* n, double* a,
+                        int* lda, double* s, double* u, int* ldu, double* vt,
+                        int* ldvt, double* work, int* lwork, int* info);
+}
+
 
 class transform {
 public:
@@ -51,10 +57,10 @@ public:
 
 
     // --- 접근자 (Getters) --- //
-    const mat4& matrix() const          { return T_.matrix();                           }
-    mat3 rotation() const               { return T_.rotation();                         }
-    quat quaternion() const             { return quat(T_.rotation());                   }
-    vec3 translation() const            { return T_.translation();                      }
+    const mat4& matrix()  const         { return T_.matrix();                           }
+    mat3 rotation()       const         { return T_.rotation();                         }
+    quat quaternion()     const         { return quat(T_.rotation());                   }
+    vec3 translation()    const         { return T_.translation();                      }
 
     double const  z()     const         { return T_.translation().z();                  }
     double const  x()     const         { return T_.translation().x();                  }
@@ -66,7 +72,7 @@ public:
     double const  pitch() const         { return T_.rotation().eulerAngles(2, 1, 0)[1]; }
     double const  yaw()   const         { return T_.rotation().eulerAngles(2, 1, 0)[0]; }
 
-    transform inverse() const           { return transform(T_.inverse());               }
+    transform inverse()   const         { return transform(T_.inverse());               }
 
 
 
@@ -126,10 +132,120 @@ public:
 
 
 
-
 // ============================================================================
 // Jacobian 인버스
 // ============================================================================
+inline transform::mat<6,12> jInv(const transform::mat<12, 6>& J) {
+    // Moore-Penrose 슈도 인버스: J^+ = (J^T * J)^-1 * J^T
+    return (J.transpose() * J).inverse() * J.transpose();
+}
+
+
+inline transform::mat<6,12> jInv_svd(const transform::mat<12, 6>& J) {
+    // SVD 기반 Moore-Penrose 슈도 인버스
+    // J = U * Σ * V^T 일 때, J^+ = V * Σ^+ * U^T
+
+    // 동적 크기 행렬로 변환하여 SVD 수행
+    Eigen::MatrixXd J_dynamic = J;
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(J_dynamic, Eigen::ComputeThinU | Eigen::ComputeThinV);
+
+    const double tolerance = 1e-10;  // singular value threshold
+
+    // Σ^+ 계산 (singular values의 역수, threshold 이하는 0으로)
+    Eigen::VectorXd singularValuesInv = svd.singularValues();
+    for (int i = 0; i < singularValuesInv.size(); ++i) {
+        if (singularValuesInv(i) > tolerance) {
+            singularValuesInv(i) = 1.0 / singularValuesInv(i);
+        } else {
+            singularValuesInv(i) = 0.0;
+        }
+    }
+
+    // J^+ = V * Σ^+ * U^T
+    // V: 6×6, Σ^+: 6×6 (diagonal), U^T: 6×12
+    Eigen::MatrixXd pinv = svd.matrixV() * singularValuesInv.asDiagonal() * svd.matrixU().transpose();
+
+    // 고정 크기 행렬로 변환하여 반환
+    return pinv;
+}
+
+
+
+Eigen::MatrixXd pInv_LAPACK(const Eigen::MatrixXd& A, double epsilon = std::numeric_limits<double>::epsilon()) {
+    int m = A.rows();
+    int n = A.cols();
+
+    // LAPACK 함수는 입력 행렬 A를 덮어쓰므로 복사본을 만듭니다.
+    Eigen::MatrixXd Acopy = A;
+
+    // U 행렬과 VT (V transpose) 행렬을 저장할 공간 할당
+    Eigen::MatrixXd U(m, m);
+    Eigen::MatrixXd Vt(n, n);
+    // 특이값 S를 저장할 벡터 (min(m, n) 크기)
+    Eigen::VectorXd S_values(std::min(m, n));
+
+    // LAPACK 인자 설정
+    char jobu = 'A';  // U 행렬의 모든 열 계산
+    char jobvt = 'A'; // V^T 행렬의 모든 행 계산
+    int lda = m;
+    int ldu = m;
+    int ldvt = n;
+    int info = 0;
+
+    // 최적의 워크스페이스 크기를 알기 위해 lwork = -1로 초기 호출
+    double work_size_query = 0.0;
+    int lwork = -1;
+
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda,
+            S_values.data(), U.data(), &ldu, Vt.data(), &ldvt,
+            &work_size_query, &lwork, &info);
+
+    if (info != 0) {
+        throw std::runtime_error("LAPACK dgesvd_ workspace query failed.");
+    }
+
+    // 최적의 워크스페이스 크기 설정 및 할당
+    lwork = static_cast<int>(work_size_query);
+    std::vector<double> work(lwork);
+
+    // 실제 SVD 계산 호출
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda,
+            S_values.data(), U.data(), &ldu, Vt.data(), &ldvt,
+            work.data(), &lwork, &info);
+
+    if (info != 0) {
+        throw std::runtime_error("LAPACK dgesvd_ computation failed.");
+    }
+
+    // --- 슈도 인버스 계산 과정 (Eigen 활용) ---
+
+    // 1. 특이값 역수 계산 및 임계값 처리
+    double tolerance = epsilon * std::max(m, n) * S_values(0);
+    for (int i = 0; i < S_values.size(); ++i) {
+        if (S_values(i) > tolerance) {
+            S_values(i) = 1.0 / S_values(i);
+        } else {
+            S_values(i) = 0.0;
+        }
+    }
+
+    // 2. 역수화된 특이값으로 대각 행렬 S+ 생성
+    // S_values는 벡터이므로, DiagonalMatrix 클래스를 사용하여 대각 행렬로 만듭니다.
+    Eigen::MatrixXd S_plus = Eigen::MatrixXd::Zero(n, m);
+    for (int i = 0; i < S_values.size(); ++i) {
+        S_plus(i, i) = S_values(i);
+    }
+
+    // 3. 슈도 인버스 공식 A+ = V * S+ * U^T 적용
+    // Vt는 이미 V^T 형태이므로 바로 사용합니다. (V = Vt.transpose())
+    Eigen::MatrixXd A_plus = Vt.transpose() * S_plus * U.transpose();
+
+    return A_plus;
+}
+
+
+
+/*
 inline transform::mat<6,12> jInv(const transform::mat<12, 6>& J) {
     transform::mat<3, 6> J_pos = J.block<3, 6>(0, 0);
     transform::mat<3, 3> JJ_T_pos = J_pos * J_pos.transpose();
@@ -149,7 +265,7 @@ inline transform::mat<6,12> jInv(const transform::mat<12, 6>& J) {
     transform::mat<12, 12> I = transform::mat<12, 12>::Identity();
     return J.transpose() * (J * J.transpose() + lambda * lambda * I).inverse();
 }
-
+*/
 
 
 inline transform::mat<6,12> jInv_SVD_Damped(const transform::mat<12, 6>& J, double lambda = 0.01) {

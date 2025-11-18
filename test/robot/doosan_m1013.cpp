@@ -292,27 +292,6 @@ int main() {
 
 
 
-    // 관절 한계 설정
-    JointLimits limits(6);
-    limits.setLimit(0, DEG_TO_RAD(-360), DEG_TO_RAD(360));
-    limits.setLimit(1, DEG_TO_RAD(-360),  DEG_TO_RAD(360));
-    limits.setLimit(2, DEG_TO_RAD(-150), DEG_TO_RAD(150));
-    limits.setLimit(3, DEG_TO_RAD(-360), DEG_TO_RAD(360));
-    limits.setLimit(4, DEG_TO_RAD(-360), DEG_TO_RAD(360));
-    limits.setLimit(5, DEG_TO_RAD(-360), DEG_TO_RAD(360));
-
-
-    int method_idx = 3;  // 0=없음, 1=단순클램핑, 2=부드러운클램핑, 3=반발력, 4=조합(권장)
-    float activation_ratio = 0.02f;
-    float repulsive_gain = 0.005f;
-
-    const char* method_names[] = {
-        "없음 (No Constraint)",
-        "단순 클램핑 (Simple Clamp)",
-        "부드러운 클램핑 (Soft Clamp)",
-        "반발력 (Repulsive)",
-        "조합 (Soft+Repulsive, 권장)"
-    };
 
 
 
@@ -323,7 +302,7 @@ int main() {
         ImGui::draw([&]()
         {
 
-            ImGui::Begin("Draw");
+            ImGui::Begin("제어");
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
 
 
@@ -339,6 +318,7 @@ int main() {
             ImGui::DragFloat("##joint6", &q5, 0.1f, -360.0f, 360.0f, "J6: %.3f deg");
 
             ImGui::Dummy(ImVec2(0, 20));
+
 
 
 // --------------------------------------
@@ -357,16 +337,6 @@ int main() {
 
             ImGui::PopItemWidth();
 
-
-            ImGui::Text("관절 한계 제약 방법 (검증됨)");
-           ImGui::Combo("##method", &method_idx, method_names, 5);
-
-           if (method_idx >= 2) {
-               ImGui::DragFloat("##activation", &activation_ratio, 0.001f, 0.001f, 0.2f, "활성화 비율: %.3f");
-           }
-           if (method_idx == 3 || method_idx == 4) {
-               ImGui::DragFloat("##repulsive", &repulsive_gain, 0.001f, 0.001f, 0.2f, "반발력 게인: %.3f");
-           }
 
 
 
@@ -476,7 +446,7 @@ int main() {
                                              DEG_TO_RAD(q4),
                                              DEG_TO_RAD(q5));
 
-            transform::mat<6, 12> j_inv = jInv_SVD_Damped(j, 0.1);
+            transform::mat<6, 12> j_inv = pInv_LAPACK(j);
 
 
 
@@ -489,8 +459,6 @@ int main() {
             q_current << DEG_TO_RAD(q0), DEG_TO_RAD(q1), DEG_TO_RAD(q2),
                         DEG_TO_RAD(q3), DEG_TO_RAD(q4), DEG_TO_RAD(q5);
 
-            JointLimitMethod method = static_cast<JointLimitMethod>(method_idx);
-            applyJointLimitConstraint(dq, q_current, limits, method, activation_ratio, repulsive_gain);
 
 
             q0 +=RAD_TO_DEG(dq(0));
@@ -508,6 +476,7 @@ int main() {
             q3 = NORM_DEG_180(q3);
             q4 = NORM_DEG_180(q4);
             q5 = NORM_DEG_180(q5);
+
 
 
 
