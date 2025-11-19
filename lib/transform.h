@@ -135,114 +135,211 @@ public:
 // ============================================================================
 // Jacobian 인버스
 // ============================================================================
-inline transform::mat<6,12> jInv(const transform::mat<12, 6>& J) {
+template<int Rows, int Cols>
+inline transform::mat<Cols, Rows> pInv(const transform::mat<Rows, Cols>& J) {
     // Moore-Penrose 슈도 인버스: J^+ = (J^T * J)^-1 * J^T
     return (J.transpose() * J).inverse() * J.transpose();
 }
 
+template<int Rows, int Cols>
+inline transform::mat<Cols, Rows> pInv_DLS(const transform::mat<Rows, Cols>& J, double lambda = 0.01) {
+    // DLS: J^+ = (J^T * J + λ^2 * I)^-1 * J^T
+    transform::mat<Rows, Rows> I = transform::mat<Rows, Rows>::Identity();
+    return J.transpose() * (J * J.transpose() + lambda * lambda * I).inverse();
+}
 
-inline transform::mat<6,12> jInv_svd(const transform::mat<12, 6>& J) {
-    // SVD 기반 Moore-Penrose 슈도 인버스
-    // J = U * Σ * V^T 일 때, J^+ = V * Σ^+ * U^T
+inline transform::mat<6, 12> pInv_Dynamic_DLS(const transform::mat<12, 6>& J) {
+    transform::mat<3, 6> J_pos = J.block<3, 6>(0, 0);
+    transform::mat<3, 3> JJ_T_pos = J_pos * J_pos.transpose();
+    Eigen::SelfAdjointEigenSolver<transform::mat<3, 3>> eigensolver(JJ_T_pos);
+    double min_eigenvalue = eigensolver.eigenvalues()(0);
 
-    // 동적 크기 행렬로 변환하여 SVD 수행
-    Eigen::MatrixXd J_dynamic = J;
-    Eigen::JacobiSVD<Eigen::MatrixXd> svd(J_dynamic, Eigen::ComputeThinU | Eigen::ComputeThinV);
+    double w_min = std::sqrt(std::max(0.0, min_eigenvalue));
 
-    const double tolerance = 1e-10;  // singular value threshold
+    double lambda_max = 0.9;
+    double w_min_threshold = 0.15;
+    double lambda = 0.01;
 
-    // Σ^+ 계산 (singular values의 역수, threshold 이하는 0으로)
-    Eigen::VectorXd singularValuesInv = svd.singularValues();
-    for (int i = 0; i < singularValuesInv.size(); ++i) {
-        if (singularValuesInv(i) > tolerance) {
-            singularValuesInv(i) = 1.0 / singularValuesInv(i);
+    if (w_min < w_min_threshold) {
+        lambda = lambda_max * (1.0 - (w_min / w_min_threshold));
+    }
+
+    transform::mat<12, 12> I = transform::mat<12, 12>::Identity();
+    return J.transpose() * (J * J.transpose() + lambda * lambda * I).inverse();
+}
+
+template<int Rows, int Cols>
+inline transform::mat<Cols, Rows> pInv_svd(const transform::mat<Rows, Cols>& J) {
+    Eigen::JacobiSVD<transform::mat<Rows, Cols>> svd(J, Eigen::ComputeFullU | Eigen::ComputeFullV);
+
+    const double tolerance = 1e-10;
+
+
+    // 특이값 벡터 가져오기
+    Eigen::VectorXd singularValues = svd.singularValues();
+    Eigen::VectorXd singularValuesInv(singularValues.size());
+
+    for (int i = 0; i < singularValues.size(); ++i) {
+        if (singularValues(i) > tolerance) {
+            singularValuesInv(i) = 1.0 / singularValues(i);
         } else {
             singularValuesInv(i) = 0.0;
         }
     }
 
-    // J^+ = V * Σ^+ * U^T
-    // V: 6×6, Σ^+: 6×6 (diagonal), U^T: 6×12
-    Eigen::MatrixXd pinv = svd.matrixV() * singularValuesInv.asDiagonal() * svd.matrixU().transpose();
 
-    // 고정 크기 행렬로 변환하여 반환
+    // 유사 역행렬의 정의에 맞게 Σ⁺ 행렬을 올바른 크기(Cols x Rows)로 구성
+    transform::mat<Cols, Rows> sigma_inv = transform::mat<Cols, Rows>::Zero();
+    sigma_inv.block(0, 0, singularValues.size(), singularValues.size()) = singularValuesInv.asDiagonal();
+
+
+    // 4. J⁺ = V * Σ⁺ * Uᵀ 계산
+    transform::mat<Cols, Rows> pinv = svd.matrixV() * sigma_inv * svd.matrixU().transpose();
+
     return pinv;
 }
 
 
+template<int Rows, int Cols>
+transform::mat<Cols, Rows> pInv_LAPACK(const transform::mat<Rows, Cols>& A, double epsilon = std::numeric_limits<double>::epsilon())
+{
+    int m = Rows;
+    int n = Cols;
+    transform::mat<Rows, Cols> Acopy = A;
 
-Eigen::MatrixXd pInv_LAPACK(const Eigen::MatrixXd& A, double epsilon = std::numeric_limits<double>::epsilon()) {
-    int m = A.rows();
-    int n = A.cols();
+    // 컴파일 타임에 최소 차원 계산
+    constexpr int min_mn = (Rows < Cols) ? Rows : Cols;
 
-    // LAPACK 함수는 입력 행렬 A를 덮어쓰므로 복사본을 만듭니다.
-    Eigen::MatrixXd Acopy = A;
+    // U, S, Vt 행렬을 transform의 타입 별칭을 사용하여 선언
+    transform::mat<Rows, Rows> U;
+    transform::mat<Cols, Cols> Vt;
+    transform::vec<min_mn> S_values;
 
-    // U 행렬과 VT (V transpose) 행렬을 저장할 공간 할당
-    Eigen::MatrixXd U(m, m);
-    Eigen::MatrixXd Vt(n, n);
-    // 특이값 S를 저장할 벡터 (min(m, n) 크기)
-    Eigen::VectorXd S_values(std::min(m, n));
 
-    // LAPACK 인자 설정
-    char jobu = 'A';  // U 행렬의 모든 열 계산
-    char jobvt = 'A'; // V^T 행렬의 모든 행 계산
-    int lda = m;
-    int ldu = m;
-    int ldvt = n;
+    char jobu = 'A';  // 모든 M x M U 행렬을 계산
+    char jobvt = 'A'; // 모든 N x N V^T 행렬을 계산
+    int lda = Rows;
+    int ldu = Rows;
+    int ldvt = Cols;
     int info = 0;
 
-    // 최적의 워크스페이스 크기를 알기 위해 lwork = -1로 초기 호출
+
+    // 워크스페이스 쿼리 및 할당
     double work_size_query = 0.0;
-    int lwork = -1;
+    int lwork = -1; // lwork = -1로 설정하여 워크스페이스 크기 쿼리
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda, S_values.data(), U.data(), &ldu, Vt.data(), &ldvt, &work_size_query, &lwork, &info);
 
-    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda,
-            S_values.data(), U.data(), &ldu, Vt.data(), &ldvt,
-            &work_size_query, &lwork, &info);
-
-    if (info != 0) {
-        throw std::runtime_error("LAPACK dgesvd_ workspace query failed.");
-    }
-
-    // 최적의 워크스페이스 크기 설정 및 할당
     lwork = static_cast<int>(work_size_query);
     std::vector<double> work(lwork);
 
+
     // 실제 SVD 계산 호출
-    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda,
-            S_values.data(), U.data(), &ldu, Vt.data(), &ldvt,
-            work.data(), &lwork, &info);
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda, S_values.data(), U.data(), &ldu, Vt.data(), &ldvt, work.data(), &lwork, &info);
 
     if (info != 0) {
-        throw std::runtime_error("LAPACK dgesvd_ computation failed.");
+        throw std::runtime_error("LAPACK dgesvd_ failed.");
     }
 
-    // --- 슈도 인버스 계산 과정 (Eigen 활용) ---
 
-    // 1. 특이값 역수 계산 및 임계값 처리
+    // 특이값에 대한 허용 오차 계산
     double tolerance = epsilon * std::max(m, n) * S_values(0);
-    for (int i = 0; i < S_values.size(); ++i) {
+
+    transform::vec<min_mn> S_inv_values = S_values;
+    int rank = 0;
+    for (int i = 0; i < min_mn; ++i) {
         if (S_values(i) > tolerance) {
-            S_values(i) = 1.0 / S_values(i);
+            S_inv_values(i) = 1.0 / S_values(i);
+            rank++;
         } else {
-            S_values(i) = 0.0;
+            S_inv_values(i) = 0.0;
         }
     }
 
-    // 2. 역수화된 특이값으로 대각 행렬 S+ 생성
-    // S_values는 벡터이므로, DiagonalMatrix 클래스를 사용하여 대각 행렬로 만듭니다.
-    Eigen::MatrixXd S_plus = Eigen::MatrixXd::Zero(n, m);
-    for (int i = 0; i < S_values.size(); ++i) {
-        S_plus(i, i) = S_values(i);
-    }
 
-    // 3. 슈도 인버스 공식 A+ = V * S+ * U^T 적용
-    // Vt는 이미 V^T 형태이므로 바로 사용합니다. (V = Vt.transpose())
-    Eigen::MatrixXd A_plus = Vt.transpose() * S_plus * U.transpose();
+    // 유사역행렬 계산: A+ = V * S_inv * U^T
+    transform::mat<Cols, Rows> A_plus = transform::mat<Cols, Rows>::Zero();
+    if (rank > 0) {
+        // Eigen::DiagonalMatrix 대신 asDiagonal() 사용
+        A_plus = Vt.transpose().leftCols(rank) *
+                 S_inv_values.head(rank).asDiagonal() *
+                 U.transpose().topRows(rank);
+    }
 
     return A_plus;
 }
 
+template<int Rows, int Cols>
+transform::mat<Cols, Rows> pInv_DLS_LAPACK(const transform::mat<Rows, Cols>& A, double lambda = 0.05) // lambda 기본값 설정
+{
+    int m = Rows;
+    int n = Cols;
+    transform::mat<Rows, Cols> Acopy = A;
+
+    // 1. 차원 결정
+    constexpr int min_mn = (Rows < Cols) ? Rows : Cols;
+
+    // 2. SVD 결과를 담을 행렬 선언
+    transform::mat<Rows, Rows> U;
+    transform::mat<Cols, Cols> Vt;
+    transform::vec<min_mn> S_values;
+
+    // LAPACK 변수 설정
+    char jobu = 'A';
+    char jobvt = 'A';
+    int lda = Rows;
+    int ldu = Rows;
+    int ldvt = Cols;
+    int info = 0;
+
+    // 3. 워크스페이스 쿼리
+    double work_size_query = 0.0;
+    int lwork = -1;
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda, S_values.data(), U.data(), &ldu, Vt.data(), &ldvt, &work_size_query, &lwork, &info);
+
+    lwork = static_cast<int>(work_size_query);
+    std::vector<double> work(lwork);
+
+    // 4. 실제 SVD 계산 (A = U * S * Vt)
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda, S_values.data(), U.data(), &ldu, Vt.data(), &ldvt, work.data(), &lwork, &info);
+
+    if (info != 0) {
+        throw std::runtime_error("LAPACK dgesvd_ failed.");
+    }
+
+    // ---------------------------------------------------------
+    // [변경됨] 5. DLS(Damped Least Squares) 공식을 이용한 역수 계산
+    // 공식: sigma_inv = sigma / (sigma^2 + lambda^2)
+    // ---------------------------------------------------------
+
+    transform::vec<min_mn> S_inv_values;
+    double lambda_sq = lambda * lambda;
+
+    for (int i = 0; i < min_mn; ++i) {
+        double sigma = S_values(i);
+
+        // DLS 공식 적용
+        // lambda가 0일 경우 일반적인 Pseudo-Inverse와 같아지지만,
+        // sigma가 0일 때의 0 division 방지를 위해 분모 체크가 필요할 수 있음.
+        double denominator = (sigma * sigma) + lambda_sq;
+
+        if (denominator > std::numeric_limits<double>::epsilon()) {
+             S_inv_values(i) = sigma / denominator;
+        } else {
+             S_inv_values(i) = 0.0;
+        }
+    }
+
+    // 6. DLS 역행렬 재구성: A_dls = V * S_inv_dls * U^T
+    // DLS는 모든 특이값을 사용하므로 rank truncation 대신 min_mn 전체를 사용합니다.
+
+    transform::mat<Cols, Rows> A_dls = transform::mat<Cols, Rows>::Zero();
+
+    // U는 MxM, Vt는 NxN 이므로, 대각 행렬 S(min_mn)에 맞춰 차원을 잘라내서 곱함
+    // (Thin SVD 형태로 재구성)
+    A_dls = Vt.transpose().leftCols(min_mn) * S_inv_values.asDiagonal() * U.transpose().topRows(min_mn);
+
+    return A_dls;
+}
 
 
 /*

@@ -267,7 +267,7 @@ int main() {
 // Target Transform 생성
 // --------------------------------------
     transform::vec3 tPos(0.62, 0.0, 0.235); // [m]
-    transform::quat qRot(transform::AngleAxis(DEG_TO_RAD(0), transform::vec3(0, 1, 0)));//
+    transform::quat qRot(transform::AngleAxis(DEG_TO_RAD(90), transform::vec3(0, 1, 0)));//
 
     transform target_tf(qRot, tPos);
 
@@ -275,12 +275,12 @@ int main() {
 // --------------------------------------
 // 로봇 Joint, Target TF 설정
 // --------------------------------------
-    float q0 = -1.0;
-    float q1 = -1.0;
-    float q2 = -1.0;
-    float q3 = -1.0;
-    float q4 = -1.0;
-    float q5 = -1.0;
+    float q0 = 90.0;
+    float q1 = 30.0;
+    float q2 = 80.0;
+    float q3 = 0.0;
+    float q4 = 75.0;
+    float q5 = 0.0;
 
     float target_x      = target_tf.x();
     float target_y      = target_tf.y();
@@ -446,8 +446,7 @@ int main() {
                                              DEG_TO_RAD(q4),
                                              DEG_TO_RAD(q5));
 
-            transform::mat<6, 12> j_inv = pInv_LAPACK(j);
-
+            transform::mat<6, 12> j_inv = pInv_Dynamic_DLS(j);
 
 
             // 각도 업데이트
@@ -455,10 +454,25 @@ int main() {
             dq = j_inv * dx * 0.1;
 
 
-            transform::vec<6> q_current;
-            q_current << DEG_TO_RAD(q0), DEG_TO_RAD(q1), DEG_TO_RAD(q2),
-                        DEG_TO_RAD(q3), DEG_TO_RAD(q4), DEG_TO_RAD(q5);
+            transform::mat<6, 6> I = transform::mat<6, 6>::Identity();
+            transform::mat<6, 6> N = I - j_inv * j;
 
+            transform::vec<6> grad_H = transform::vec<6>::Zero();
+            float q_current_deg[6] = {q0, q1, q2, q3, q4, q5};
+            float q_min_deg[6] = {-360, -100, -360, -360, -360, -360};  // 예시: 최소 각도
+            float q_max_deg[6] = { 360,  0,  360,  360,  360,  360};        // 예시: 최대 각도
+
+            for (int i = 0; i < 6; ++i) {
+                float q_mid = (q_max_deg[i] + q_min_deg[i]) / 2.0f;
+                float q_range = (q_max_deg[i] - q_min_deg[i]);
+                grad_H(i) = -((q_current_deg[i] - q_mid) / q_range);
+            }
+
+            float k0 = 0.9; // 관절 한계 회피 강도 조절 계수
+            transform::vec<6> dq_null = N * grad_H * k0;
+
+            // 4. 최종 dq에 dq_null 더하기
+            dq += dq_null;
 
 
             q0 +=RAD_TO_DEG(dq(0));
