@@ -1,48 +1,318 @@
 #include "common_types.h"
 #include "imgui.h"
 #include "implot3d.h"
-#include "transform.h"
+#include "robot/transform.h"
+#include "robot/jacobian_inverse.h"
+#include "robot/imgui_draw_manipulability.hpp"
+
 
 #include <iostream>
 #include <cmath>
-
-
-
-
 #include <vector>
 #include <string>
 #include <stdexcept>
-#include <iostream>
-
-
-
-
-
-
-
 
 
 // 두산 M1013 링크 길이
-const double l1 = 0.135;    // [m]
-const double l2 = 0.1702;   // [m]
-const double l3 = 0.411;    // [m]
-const double l4 = 0.164;    // [m]
-const double l5 = 0.368;    // [m]
-const double l6 = 0.1522;   // [m]
-const double l7 = 0.146;    // [m]
-const double l8 = 0.121;    // [m]
+const double l1 = 0.135;
+const double l2 = 0.1702;
+const double l3 = 0.411;
+const double l4 = 0.164;
+const double l5 = 0.368;
+const double l6 = 0.1522;
+const double l7 = 0.146;
+const double l8 = 0.121;
+
+
+// 시각화용 AxisObject
+AxisObject origine(0.1);
+AxisObject base(0.05);
+AxisObject joint1(0.05);
+AxisObject joint2(0.05);
+AxisObject joint3(0.05);
+AxisObject joint4(0.05);
+AxisObject joint5(0.05);
+AxisObject joint6(0.05);
+AxisObject endEffector(0.06);
+
+
+// 끝단의 매니풀러빌리티와 로봇 링크 관절을 그리는 함수
+void draw_simulation(const mat<12, 6>& j, const transform& fk);
+// 두산 M1013 Jacobian 함수
+mat<12, 6> Jcobian(double q0, double q1, double q2, double q3, double q4, double q5);
+
+
+
+// 관절 제한 구조체
+struct JointLimits {
+    double min_deg;
+    double max_deg;
+};
+
+const std::vector<JointLimits> limits = {
+    {-360.0, 360.0},
+    {-360.0, 360.0},
+    {-0.0, 150.0}, // 예: 3번 관절 제한
+    {-360.0, 360.0},
+    {-360.0, 360.0},
+    {-360.0, 360.0}
+};
+
+// vec<6> solve_qp_box_constraints(const mat<6, 6>& H, const vec<6>& g, const vec<6>& lb, const vec<6>& ub)
+// {
+//
+//     return x;
+// }
+
+int main() {
+    std::cout << "두산 로봇 M1013 IK - Jacobian 단계 제약조건 통합" << std::endl;
+
+
+
+
+    // 기본 자세 설정
+    float q_deg[6] = {90.0f, 30.0f, 80.0f, 0.0f, 75.0f, 0.0f};
+    vec3 tPos(0.62, 0.0, 0.235);
+    quat qRot(transform::AngleAxis(DEG_TO_RAD(90), vec3(0, 1, 0)));
+    transform target_tf(qRot, tPos);
+
+    float target_x      = target_tf.x();
+    float target_y      = target_tf.y();
+    float target_z      = target_tf.z();
+    float target_roll   = RAD_TO_DEG(target_tf.roll());
+    float target_pitch  = RAD_TO_DEG(target_tf.pitch());
+    float target_yaw    = RAD_TO_DEG(target_tf.yaw());
+
+
+    ImGui::start("데모");
+
+    while (ImGui::isRunning())
+    {
+        ImGui::draw([&]()
+        {
+            ImGui::Begin("제어");
+            ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+
+            ImGui::Text("Joint 설정");
+            ImGui::DragFloat("##j1", &q_deg[0], 0.1f, limits[0].min_deg, limits[0].max_deg, "J1: %.3f");
+            ImGui::DragFloat("##j2", &q_deg[1], 0.1f, limits[1].min_deg, limits[1].max_deg, "J2: %.3f");
+            ImGui::DragFloat("##j3", &q_deg[2], 0.1f, limits[2].min_deg, limits[2].max_deg, "J3: %.3f");
+            ImGui::DragFloat("##j4", &q_deg[3], 0.1f, limits[3].min_deg, limits[3].max_deg, "J4: %.3f");
+            ImGui::DragFloat("##j5", &q_deg[4], 0.1f, limits[4].min_deg, limits[4].max_deg, "J5: %.3f");
+            ImGui::DragFloat("##j6", &q_deg[5], 0.1f, limits[5].min_deg, limits[5].max_deg, "J6: %.3f");
+            ImGui::Dummy(ImVec2(0, 20));
+
+            ImGui::Text("Target Transform 설정");
+            ImGui::DragFloat("##Target x", &target_x, 0.01f, -1.0f, 1.0f, "x: %.3f");
+            ImGui::DragFloat("##Target y", &target_y, 0.01f, -1.0f, 1.0f, "y: %.3f");
+            ImGui::DragFloat("##Target z", &target_z, 0.001f, -1.0f, 2.0f, "z: %.3f");
+            ImGui::Dummy(ImVec2(0, 10));
+            ImGui::DragFloat("##Target Roll", &target_roll, 1.0f, -180.0f, 180.0f, "Roll: %.3f");
+            ImGui::DragFloat("##Target Pitch", &target_pitch, 1.0f, -130.0f, 130.0f, "Pitch: %.3f");
+            ImGui::DragFloat("##Target Yaw", &target_yaw, 1.0f, -180.0f, 180.0f, "Yaw: %.3f");
+            ImGui::PopItemWidth();
+
+
+
+            // Target Transform
+            quat target_qRot(transform::AngleAxis(DEG_TO_RAD(target_yaw), vec3::UnitZ()) *
+                                        transform::AngleAxis(DEG_TO_RAD(target_pitch + 90.0), vec3::UnitY()) *
+                                        transform::AngleAxis(DEG_TO_RAD(target_roll), vec3::UnitZ()));
+            target_tf = transform(target_qRot, vec3(target_x, target_y, target_z));
+
+
+
+            // FK
+            transform tf1(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[0]), vec3::UnitZ())), vec3(0, 0, l1));
+            transform tf2(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[1]), vec3::UnitX())), vec3(-l2, 0, 0));
+            transform tf3(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[2]), vec3::UnitX())), vec3(0, 0, l3));
+            transform tf4(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[3]), vec3::UnitZ())), vec3(l4, 0, 0));
+            transform tf5(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[4]), vec3::UnitX())), vec3(-l6, 0, l5));
+            transform tf6(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[5]), vec3::UnitZ())), vec3(l7, 0, 0));
+            transform tf_ee(quat(transform::AngleAxis(DEG_TO_RAD(0), vec3::UnitZ())), vec3(0, 0, l8));
+
+            transform final_tf1 = tf1;
+            transform final_tf2 = final_tf1 * tf2;
+            transform final_tf3 = final_tf2 * tf3;
+            transform final_tf4 = final_tf3 * tf4;
+            transform final_tf5 = final_tf4 * tf5;
+            transform final_tf6 = final_tf5 * tf6;
+            transform final_tf_ee = final_tf6 * tf_ee;
+            transform fk = final_tf_ee;
+
+
+
+            // Axis Transform 설정
+            joint1.setTransform(final_tf1);
+            joint2.setTransform(final_tf2);
+            joint3.setTransform(final_tf3);
+            joint4.setTransform(final_tf4);
+            joint5.setTransform(final_tf5);
+            joint6.setTransform(final_tf6);
+            endEffector.setTransform(final_tf_ee);
+
+
+
+            // IK
+
+
+            // 1. 오차(dx) 계산
+            transform error = target_tf - fk;
+            vec<12> dx;
+            dx << error(0,3), error(1,3), error(2,3),
+                  error(0,0), error(0,1), error(0,2),
+                  error(1,0), error(1,1), error(1,2),
+                  error(2,0), error(2,1), error(2,2);
+
+            // IK Gain (너무 크면 발산)
+            dx = dx ;
+
+            // 2. Jacobian 계산
+            mat<12, 6> J = Jcobian(DEG_TO_RAD(q_deg[0]), DEG_TO_RAD(q_deg[1]), DEG_TO_RAD(q_deg[2]),
+                                   DEG_TO_RAD(q_deg[3]), DEG_TO_RAD(q_deg[4]), DEG_TO_RAD(q_deg[5]));
+
+            // 3. QP Formulation: min || J*dq - dx ||^2 + lambda || dq ||^2
+            //    전개하면: dq^T * (J^T*J + lambda*I) * dq - 2*(J^T*dx)^T * dq
+            //    H = J^T * J + lambda * I
+            //    g = -J^T * dx
+
+            double lambda = 0.01; // Damping Factor (특이점 방지용)
+            mat<6, 12> J_t = J.transpose();
+            mat<6, 6> H = J_t * J;
+
+            // Damping 추가 (H 대각 성분에 lambda 더하기)
+            for(int i=0; i<6; i++) H(i,i) += lambda * lambda;
+
+            vec<6> g = -J_t * dx;
+
+            // 4. 제약조건 설정 (Bounds)
+            // 현재 각도에서 한계까지 남은 거리(Distance)를 계산하여 dq의 상하한(lb, ub)으로 설정
+            vec<6> lb, ub;
+
+            for(int i=0; i<6; ++i) {
+                double current_rad = DEG_TO_RAD(q_deg[i]);
+                double min_rad = DEG_TO_RAD(limits[i].min_deg);
+                double max_rad = DEG_TO_RAD(limits[i].max_deg);
+
+                // dq는 "변위"이므로, 현재 위치에서 갈 수 있는 최대/최소 변위를 구함
+                // 안전 여유(Buffer)를 조금 둘 수도 있음
+                lb(i) = (min_rad - current_rad);
+                ub(i) = (max_rad - current_rad);
+
+                // (선택사항) 한 번에 너무 많이 움직이지 않도록 최대 속도 제한을 걸 수도 있음
+                double max_step = DEG_TO_RAD(10.0);
+                lb(i) = std::max(lb(i), -max_step);
+                ub(i) = std::min(ub(i), max_step);
+            }
+
+            // 5. QP Solver 실행 (Active Set / Gauss-Seidel)
+            vec<6> dq;
+
+            // 초기값은 0으로 시작
+            vec<6> x = vec<6>::Zero();
+
+            // Gauss-Seidel 반복 횟수 (보통 10~20번이면 충분히 수렴)
+            const int max_iter = 20;
+
+            for (int iter = 0; iter < max_iter; ++iter) {
+                for (int i = 0; i < 6; ++i) {
+                    // Sigma (H_ij * x_j) 계산 (j != i)
+                    double sigma = 0.0;
+                    for (int j = 0; j < 6; ++j) {
+                        if (i != j) {
+                            sigma += H(i, j) * x(j);
+                        }
+                    }
+
+                    // x_i 업데이트 공식: ( -g_i - sigma ) / H_ii
+                    double val = (-g(i) - sigma) / H(i, i);
+
+                    // [핵심] 계산된 값을 즉시 제약 조건 범위 내로 투영(Project/Clamp)
+                    // 이것이 QP에서 부등식 제약조건을 처리하는 방식입니다.
+                    if (val < lb(i)) val = lb(i);
+                    if (val > ub(i)) val = ub(i);
+
+                    x(i) = val;
+                }
+            }
+
+            dq = x;
+
+            // 6. 업데이트
+            for(int i=0; i<6; ++i) {
+                q_deg[i] += RAD_TO_DEG(dq(i));
+            }
+
+
+
+            // Ui
+            {
+                ImGui::Text("FK: x=%.3f, y=%.3f, z=%.3f", fk.translation().x(), fk.translation().y(), fk.translation().z());
+                ImGui::Text("FK: roll=%.3f, pitch=%.3f, yaw=%.3f", RAD_TO_DEG(fk.roll()), RAD_TO_DEG(fk.pitch()), RAD_TO_DEG(fk.yaw()));
+
+                ImGui::Dummy(ImVec2(0, 10));
+
+                draw_simulation(J, fk);
+
+            }
+            ImGui::End();
+
+
+
+        });
+    }
+    ImGui::stop();
+
+    return 0;
+}
 
 
 
 
 
+// -----------------------------------------------
+// 이 아래 코드는 생성하지 않아도됨. 필요시에만 별도로 작성
+// ------------------------------------------------
 
 
-
-// 두산 M1013 Jacobian 함수 [rad]
-transform::mat<12, 6> Jcobian(float q0, float q1, float q2, float q3, float q4, float q5)
+void draw_simulation(const mat<12, 6>& j, const transform& fk)
 {
-    static transform::mat<12, 6> J = transform::mat<12, 6>::Zero();
+    ImGui::Begin("시각화");
+    if (ImPlot3D::BeginPlot("로봇 FK/IK", ImVec2(-1,-1), ImPlot3DFlags_Equal | ImPlot3DFlags_NoLegend))
+    {
+        ImPlot3D::SetupAxesLimits(-1.3, 1.3, -1.3, 1.3, 0.0, 1.3, ImPlot3DCond_Always);
+        ImPlot3D::SetupAxes("X", "Y", "Z");
+
+        origine.Draw();
+        base.Draw();
+        joint1.Draw();
+        joint2.Draw();
+        joint3.Draw();
+        joint4.Draw();
+        joint5.Draw();
+        joint6.Draw();
+        endEffector.Draw();
+
+        DrawLinkLine(base, joint1);
+        DrawLinkLine(joint1, joint2);
+        DrawLinkLine(joint2, joint3);
+        DrawLinkLine(joint3, joint4);
+        DrawLinkLine(joint4, joint5);
+        DrawLinkLine(joint5, joint6);
+        DrawLinkLine(joint6, endEffector);
+
+        mat<3, 6> j_pos = j.block<3, 6>(0, 0);
+        imgui_draw_manipulability(j_pos, fk.translation(), 0.3f, ImVec4(0,1,1,0.1f));
+
+        ImPlot3D::EndPlot();
+    }
+    ImGui::End();
+}
+
+
+mat<12, 6> Jcobian(double q0, double q1, double q2, double q3, double q4, double q5)
+{
+    static mat<12, 6> J = mat<12, 6>::Zero();
 
     double c0 = std::cos(q0);
     double s0 = std::sin(q0);
@@ -56,7 +326,6 @@ transform::mat<12, 6> Jcobian(float q0, float q1, float q2, float q3, float q4, 
     double s5 = std::sin(q5);
     double c12 = std::cos(q1 + q2);
     double s12 = std::sin(q1 + q2);
-
 
     J(0,0) = l2*s0 + l3*s1*c0 - l4*s0 + l5*s12*c0 + l6*(s0*c3 + s3*c0*c12) - l7*(s0*c3 + s3*c0*c12) - l8*((s0*s3 - c0*c3*c12)*s4 - s12*c0*c4);
     J(0,1) = (l3*c1 + l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
@@ -135,421 +404,154 @@ transform::mat<12, 6> Jcobian(float q0, float q1, float q2, float q3, float q4, 
 }
 
 
-
-
-// Manipulability Ellipsoid 그리기
-void draw_manipulabilityEllipsoid(const transform::mat<3, 6>& J_position,
-                                 const transform::vec3& center,
-                                 float scale = 1.0f,
-                                 const ImVec4& color = ImVec4(0.0f, 1.0f, 1.0f, 0.5f))
+/* 구현 내용. 실제로는 trasform.h에 inline으로 되어잇음. 이건 참고용
+ *template<int Rows, int Cols>
+transform::mat<Cols, Rows> pInv_DLS_LAPACK(const transform::mat<Rows, Cols>& A, double lambda = 0.05) // lambda 기본값 설정
 {
-    // J * J^T 계산 (3x3 행렬)
-    Eigen::Matrix3d M = J_position * J_position.transpose();
+    int m = Rows;
+    int n = Cols;
+    transform::mat<Rows, Cols> Acopy = A;
 
+    // 1. 차원 결정
+    constexpr int min_mn = (Rows < Cols) ? Rows : Cols;
 
-    // 고유값 분해
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigensolver(M);
-    if (eigensolver.info() != Eigen::Success) {
-        return;
+    // 2. SVD 결과를 담을 행렬 선언
+    transform::mat<Rows, Rows> U;
+    transform::mat<Cols, Cols> Vt;
+    transform::vec<min_mn> S_values;
+
+    // LAPACK 변수 설정
+    char jobu = 'A';
+    char jobvt = 'A';
+    int lda = Rows;
+    int ldu = Rows;
+    int ldvt = Cols;
+    int info = 0;
+
+    // 3. 워크스페이스 쿼리
+    double work_size_query = 0.0;
+    int lwork = -1;
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda, S_values.data(), U.data(), &ldu, Vt.data(), &ldvt, &work_size_query, &lwork, &info);
+
+    lwork = static_cast<int>(work_size_query);
+    std::vector<double> work(lwork);
+
+    // 4. 실제 SVD 계산 (A = U * S * Vt)
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda, S_values.data(), U.data(), &ldu, Vt.data(), &ldvt, work.data(), &lwork, &info);
+
+    if (info != 0) {
+        throw std::runtime_error("LAPACK dgesvd_ failed.");
     }
 
+    // ---------------------------------------------------------
+    // 공식: sigma_inv = sigma / (sigma^2 + lambda^2)
+    // ---------------------------------------------------------
 
-    Eigen::Vector3d eigenvalues = eigensolver.eigenvalues();
-    Eigen::Matrix3d eigenvectors = eigensolver.eigenvectors();
+    transform::vec<min_mn> S_inv_values;
+    double lambda_sq = lambda * lambda;
 
+    for (int i = 0; i < min_mn; ++i) {
+        double sigma = S_values(i);
 
-    // 타원체의 반지름 (고유값의 제곱근)
-    Eigen::Vector3d radii = eigenvalues.cwiseSqrt() * scale;
+        // DLS 공식 적용
+        // lambda가 0일 경우 일반적인 Pseudo-Inverse와 같아지지만,
+        // sigma가 0일 때의 0 division 방지를 위해 분모 체크가 필요할 수 있음.
+        double denominator = (sigma * sigma) + lambda_sq;
 
-
-    // 구 생성 (위도, 경도)
-    const int lat_segments = 16;
-    const int lon_segments = 16;
-    std::vector<float> sphere_x, sphere_y, sphere_z;
-
-
-    for (int i = 0; i <= lat_segments; ++i) {
-        float theta = M_PI * i / lat_segments; // 0 to π
-        float sin_theta = std::sin(theta);
-        float cos_theta = std::cos(theta);
-
-        for (int j = 0; j <= lon_segments; ++j) {
-            float phi = 2.0f * M_PI * j / lon_segments; // 0 to 2π
-            float sin_phi = std::sin(phi);
-            float cos_phi = std::cos(phi);
-
-            // 단위 구 좌표
-            Eigen::Vector3d unit_sphere(sin_theta * cos_phi,
-                                        sin_theta * sin_phi,
-                                        cos_theta);
-
-            // 타원체로 변환: 고유벡터로 회전 + 고유값으로 스케일
-            Eigen::Vector3d ellipsoid_point = eigenvectors * (radii.asDiagonal() * unit_sphere);
-
-            // 중심점으로 이동
-            ellipsoid_point += center;
-
-            sphere_x.push_back(static_cast<float>(ellipsoid_point.x()));
-            sphere_y.push_back(static_cast<float>(ellipsoid_point.y()));
-            sphere_z.push_back(static_cast<float>(ellipsoid_point.z()));
+        if (denominator > std::numeric_limits<double>::epsilon()) {
+             S_inv_values(i) = sigma / denominator;
+        } else {
+             S_inv_values(i) = 0.0;
         }
     }
 
+    // 6. DLS 역행렬 재구성: A_dls = V * S_inv_dls * U^T
+    // DLS는 모든 특이값을 사용하므로 rank truncation 대신 min_mn 전체를 사용합니다.
 
-    // 와이어프레임으로 그리기
-    ImPlot3D::PushStyleColor(ImPlot3DCol_Line, color);
+    transform::mat<Cols, Rows> A_dls = transform::mat<Cols, Rows>::Zero();
 
-    // 레전드 끄기
+    // U는 MxM, Vt는 NxN 이므로, 대각 행렬 S(min_mn)에 맞춰 차원을 잘라내서 곱함
+    // (Thin SVD 형태로 재구성)
+    A_dls = Vt.transpose().leftCols(min_mn) * S_inv_values.asDiagonal() * U.transpose().topRows(min_mn);
 
-
-
-    // 위도선 그리기
-    for (int i = 0; i <= lat_segments; ++i) {
-        std::vector<float> line_x, line_y, line_z;
-        for (int j = 0; j <= lon_segments; ++j) {
-            int idx = i * (lon_segments + 1) + j;
-            line_x.push_back(sphere_x[idx]);
-            line_y.push_back(sphere_y[idx]);
-            line_z.push_back(sphere_z[idx]);
-        }
-        ImPlot3D::PlotLine("Manipulability", line_x.data(), line_y.data(), line_z.data(), line_x.size());
-    }
-
-
-    // 경도선 그리기
-    for (int j = 0; j <= lon_segments; ++j) {
-        std::vector<float> line_x, line_y, line_z;
-        for (int i = 0; i <= lat_segments; ++i) {
-            int idx = i * (lon_segments + 1) + j;
-            line_x.push_back(sphere_x[idx]);
-            line_y.push_back(sphere_y[idx]);
-            line_z.push_back(sphere_z[idx]);
-        }
-        ImPlot3D::PlotLine("Manipulability", line_x.data(), line_y.data(), line_z.data(), line_x.size());
-    }
-
-    ImPlot3D::PopStyleColor();
+    return A_dls;
 }
-
-
-
-int main() {
-    std::cout << "두산 로봇 M1013 IK 테스트 실행..." << std::endl;
-
-// --------------------------------------
-// 3D 축 객체
-// --------------------------------------
-    AxisObject origine(0.1);
-    AxisObject base(0.05);
-    AxisObject joint1(0.05);
-    AxisObject joint2(0.05);
-    AxisObject joint3(0.05);
-    AxisObject joint4(0.05);
-    AxisObject joint5(0.05);
-    AxisObject joint6(0.05);
-    AxisObject endEffector(0.06);
-
-
-// --------------------------------------
-// 로봇 링크 TF
-// --------------------------------------
-    transform base_tf;
-    transform joint1_tf;
-    transform joint2_tf;
-    transform joint3_tf;
-    transform joint4_tf;
-    transform joint5_tf;
-    transform joint6_tf;
-    transform endEffector_tf;
-
-
-// --------------------------------------
-// Target Transform 생성
-// --------------------------------------
-    transform::vec3 tPos(0.62, 0.0, 0.235); // [m]
-    transform::quat qRot(transform::AngleAxis(DEG_TO_RAD(90), transform::vec3(0, 1, 0)));//
-
-    transform target_tf(qRot, tPos);
-
-
-// --------------------------------------
-// 로봇 Joint, Target TF 설정
-// --------------------------------------
-    float q0 = 90.0;
-    float q1 = 30.0;
-    float q2 = 80.0;
-    float q3 = 0.0;
-    float q4 = 75.0;
-    float q5 = 0.0;
-
-    float target_x      = target_tf.x();
-    float target_y      = target_tf.y();
-    float target_z      = target_tf.z();
-    float target_roll   = RAD_TO_DEG(target_tf.roll());
-    float target_pitch  = RAD_TO_DEG(target_tf.pitch());
-    float target_yaw    = RAD_TO_DEG(target_tf.yaw());
-
-
-
-
-
-
-
-    ImGui::start("데모");
-
-    while (ImGui::isRunning())
-    {
-        ImGui::draw([&]()
-        {
-
-            ImGui::Begin("제어");
-            ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-
-
-// --------------------------------------
-//          | Joint 각도 조절 슬라이더
-// --------------------------------------
-            ImGui::Text("Joint 설정");
-            ImGui::DragFloat("##joint1", &q0, 0.1f, -360.0f, 360.0f, "J1: %.3f deg");
-            ImGui::DragFloat("##joint2", &q1, 0.1f, -360.0f, 360.0f, "J2: %.3f deg");
-            ImGui::DragFloat("##joint3", &q2, 0.1f, -150.0f, 150.0f, "J3: %.3f deg");
-            ImGui::DragFloat("##joint4", &q3, 0.1f, -360.0f, 360.0f, "J4: %.3f deg");
-            ImGui::DragFloat("##joint5", &q4, 0.1f, -360.0f, 360.0f, "J5: %.3f deg");
-            ImGui::DragFloat("##joint6", &q5, 0.1f, -360.0f, 360.0f, "J6: %.3f deg");
-
-            ImGui::Dummy(ImVec2(0, 20));
-
-
-
-// --------------------------------------
-//          | Target Transform 설정 슬라이더
-// --------------------------------------
-            ImGui::Text("Target Transform 설정");
-            ImGui::DragFloat("##Target x", &target_x, 0.01f, -1.0f, 1.0f, "x: %.3f");
-            ImGui::DragFloat("##Target y", &target_y, 0.01f, -1.0f, 1.0f, "y: %.3f");
-            ImGui::DragFloat("##Target z", &target_z, 0.001f, -1.0f, 2.0f, "z: %.3f");
-
-            ImGui::Dummy(ImVec2(0, 10));
-
-            ImGui::DragFloat("##Target Roll", &target_roll, 1.0f, -180.0f, 180.0f, "Roll: %.3f");
-            ImGui::DragFloat("##Target Pitch", &target_pitch, 1.0f, -130.0f, 130.0f, "Pitch: %.3f");
-            ImGui::DragFloat("##Target Yaw", &target_yaw, 1.0f, -180.0f, 180.0f, "Yaw: %.3f");
-
-            ImGui::PopItemWidth();
-
-
-
-
-// --------------------------------------
-//          | Target Transform 계산
-//          | ZYZ Euler 회전 사용
-// --------------------------------------
-            transform::quat target_qRot(transform::AngleAxis(DEG_TO_RAD(target_yaw), transform::vec3::UnitZ()) *        // Z
-                                        transform::AngleAxis(DEG_TO_RAD(target_pitch + 90), transform::vec3::UnitY()) * // Y ( +90 ) 주의
-                                        transform::AngleAxis(DEG_TO_RAD(target_roll), transform::vec3::UnitZ()));       // Z
-            target_tf = transform(target_qRot, transform::vec3(target_x, target_y, target_z));
-
-
-
-
-// --------------------------------------
-//          | 각 Joint TF 계산
-// --------------------------------------
-            // Joint1: base 좌표계 기준
-            transform::vec3 pos1(0, 0, l1);
-            transform::quat rot1(transform::AngleAxis(DEG_TO_RAD(q0), transform::vec3::UnitZ()));
-            transform tf1(rot1, pos1);
-
-            // Joint2: Joint1 좌표계 기준
-            transform::vec3 pos2(-l2, 0, 0);
-            transform::quat rot2(transform::AngleAxis(DEG_TO_RAD(q1), transform::vec3::UnitX()));
-            transform tf2(rot2, pos2);
-
-            // Joint3: Joint2 좌표계 기준
-            transform::vec3 pos3(0, 0, l3);
-            transform::quat rot3(transform::AngleAxis(DEG_TO_RAD(q2), transform::vec3::UnitX()));
-            transform tf3(rot3, pos3);
-
-            // Joint4: Joint3 좌표계 기준
-            transform::vec3 pos4(l4, 0, 0);
-            transform::quat rot4(transform::AngleAxis(DEG_TO_RAD(q3), transform::vec3::UnitZ()));
-            transform tf4(rot4, pos4);
-
-            // Joint5: Joint4 좌표계 기준
-            transform::vec3 pos5(-l6, 0, l5);
-            transform::quat rot5(transform::AngleAxis(DEG_TO_RAD(q4), transform::vec3::UnitX()));
-            transform tf5(rot5, pos5);
-
-            // Joint6: Joint5 좌표계 기준
-            transform::vec3 pos6(l7, 0, 0);
-            transform::quat rot6(transform::AngleAxis(DEG_TO_RAD(q5), transform::vec3::UnitZ()));
-            transform tf6(rot6, pos6);
-
-            // EndEffector: Joint6 좌표계 기준
-            transform::vec3 pos_ee(0, 0, l8);
-            transform::quat rot_ee(transform::AngleAxis(DEG_TO_RAD(0), transform::vec3::UnitZ()));
-            transform tf_ee(rot_ee, pos_ee);
-
-
-
-// --------------------------------------
-//          | FK ( Forward Kinematics )
-// --------------------------------------
-            transform final_tf1   = tf1;
-            transform final_tf2   = final_tf1 * tf2;
-            transform final_tf3   = final_tf2 * tf3;
-            transform final_tf4   = final_tf3 * tf4;
-            transform final_tf5   = final_tf4 * tf5;
-            transform final_tf6   = final_tf5 * tf6;
-            transform final_tf_ee = final_tf6 * tf_ee;
-
-            transform fk = final_tf_ee;
-
-            // AxisObject에 최종 변환 적용
-            joint1.setTransform(final_tf1);
-            joint2.setTransform(final_tf2);
-            joint3.setTransform(final_tf3);
-            joint4.setTransform(final_tf4);
-            joint5.setTransform(final_tf5);
-            joint6.setTransform(final_tf6);
-            endEffector.setTransform(final_tf_ee);
-
-
-
-
-// --------------------------------------
-//          | IK ( Inverse Kinematics )
-// --------------------------------------
-
-            // Transform 오차 계산
-            transform error = target_tf - fk;
-            transform::vec<12> dx;
-            dx <<   error(0, 3),
-                    error(1, 3),
-                    error(2, 3),
-                    error(0, 0),
-                    error(0, 1),
-                    error(0, 2),
-                    error(1, 0),
-                    error(1, 1),
-                    error(1, 2),
-                    error(2, 0),
-                    error(2, 1),
-                    error(2, 2);
-
-
-            // Jacobian
-            transform::mat<12,6> j = Jcobian(DEG_TO_RAD(q0),
-                                             DEG_TO_RAD(q1),
-                                             DEG_TO_RAD(q2),
-                                             DEG_TO_RAD(q3),
-                                             DEG_TO_RAD(q4),
-                                             DEG_TO_RAD(q5));
-
-            transform::mat<6, 12> j_inv = pInv_Dynamic_DLS(j);
-
-
-            // 각도 업데이트
-            transform::vec<6> dq;
-            dq = j_inv * dx * 0.1;
-
-
-            transform::mat<6, 6> I = transform::mat<6, 6>::Identity();
-            transform::mat<6, 6> N = I - j_inv * j;
-
-            transform::vec<6> grad_H = transform::vec<6>::Zero();
-            float q_current_deg[6] = {q0, q1, q2, q3, q4, q5};
-            float q_min_deg[6] = {-360, -100, -360, -360, -360, -360};  // 예시: 최소 각도
-            float q_max_deg[6] = { 360,  0,  360,  360,  360,  360};        // 예시: 최대 각도
-
-            for (int i = 0; i < 6; ++i) {
-                float q_mid = (q_max_deg[i] + q_min_deg[i]) / 2.0f;
-                float q_range = (q_max_deg[i] - q_min_deg[i]);
-                grad_H(i) = -((q_current_deg[i] - q_mid) / q_range);
-            }
-
-            float k0 = 0.9; // 관절 한계 회피 강도 조절 계수
-            transform::vec<6> dq_null = N * grad_H * k0;
-
-            // 4. 최종 dq에 dq_null 더하기
-            dq += dq_null;
-
-
-            q0 +=RAD_TO_DEG(dq(0));
-            q1 +=RAD_TO_DEG(dq(1));
-            q2 +=RAD_TO_DEG(dq(2));
-            q3 +=RAD_TO_DEG(dq(3));
-            q4 +=RAD_TO_DEG(dq(4));
-            q5 +=RAD_TO_DEG(dq(5));
-
-
-
-            q0 = NORM_DEG_180(q0);
-            q1 = NORM_DEG_180(q1);
-            q2 = NORM_DEG_180(q2);
-            q3 = NORM_DEG_180(q3);
-            q4 = NORM_DEG_180(q4);
-            q5 = NORM_DEG_180(q5);
-
-
-
-
-            float x, y, z;
-            x = fk.translation().x();
-            y = fk.translation().y();
-            z = fk.translation().z();
-            ImGui::Text("x: %.3f, y: %.3f, z: %.3f", x, y, z);
-
-            float roll = fk.roll();
-            float pitch = fk.pitch();
-            float yaw = fk.yaw();
-            ImGui::Text("roll: %.3f, pitch: %.3f, yaw: %.3f", RAD_TO_DEG(roll), RAD_TO_DEG(pitch), RAD_TO_DEG(yaw));
-
-
-            ImGui::End();
-
-
-            ImGui::Begin("시각화");
-            if (ImPlot3D::BeginPlot("로봇 FK/IK 시각화", ImVec2(-1, -1), ImPlot3DFlags_Equal | ImPlot3DFlags_NoLegend))
-            {
-                ImPlot3D::SetupAxesLimits(-1.3, 1.3, -1.3, 1.3, 0.0, 1.3, ImPlot3DCond_Always);
-                ImPlot3D::SetupAxes("X", "Y", "Z");
-
-                // 축 그리기
-                origine.Draw();
-                base.Draw();
-                joint1.Draw();
-                joint2.Draw();
-                joint3.Draw();
-                joint4.Draw();
-                joint5.Draw();
-                joint6.Draw();
-                endEffector.Draw();
-
-                // 링크선 그리기 (노란색)
-                DrawLinkLine(base, joint1);
-                DrawLinkLine(joint1, joint2);
-                DrawLinkLine(joint2, joint3);
-                DrawLinkLine(joint3, joint4);
-                DrawLinkLine(joint4, joint5);
-                DrawLinkLine(joint5, joint6);
-                DrawLinkLine(joint6, endEffector);
-
-
-                // Manipulability ellipsoid 그리기
-                transform::mat<3, 6> j_position_final = j.block<3, 6>(0, 0);
-                draw_manipulabilityEllipsoid(j_position_final, fk.translation(), 0.3f, ImVec4(0.0f, 1.0f, 1.0f, 0.1f));
-
-
-                ImPlot3D::EndPlot();
-
-                ImGui::End();
-            }
-
-        });
+*/
+
+
+
+/*
+double compute_jacobian_condition_number(const transform::mat<12, 6>& J)
+{
+int m = 12;
+    int n = 6;
+    // J의 데이터를 복사하여 LAPACK 함수에 전달할 수 있도록 준비
+    transform::mat<12, 6> Acopy = J;
+
+    constexpr int min_mn = 6;
+    // SVD 결과를 저장할 행렬 및 벡터
+    transform::mat<12, 12> U;
+    transform::mat<6, 6> Vt;
+    transform::vec<min_mn> S_values; // 특이값은 min(M, N) 개
+
+    // LAPACK 변수 설정
+    char jobu = 'N'; // U 행렬 계산 안 함 (조건수 계산에 필요 없음)
+    char jobvt = 'N'; // V^T 행렬 계산 안 함 (조건수 계산에 필요 없음)
+    int lda = 12;
+    int ldu = 12; // jobu='N'이므로 사용되지 않음
+    int ldvt = 6; // jobvt='N'이므로 사용되지 않음
+    int info = 0;
+
+    // 1. 워크스페이스(Work Buffer) 크기 쿼리
+    double work_size_query = 0.0;
+    int lwork = -1;
+
+    // dgesvd_ 호출 (LWORK = -1)
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda, S_values.data(), U.data(), &ldu, Vt.data(), &ldvt, &work_size_query, &lwork, &info);
+
+    // 2. 워크스페이스 크기 설정 및 메모리 할당
+    if (info != 0 && lwork == -1) {
+        // 쿼리 단계에서 오류가 발생했으나, 보통 -1로 호출하면 성공해야 함.
+        // 여기서는 단순하게 크기를 가져왔다고 가정합니다.
     }
-    ImGui::stop();
 
+    // 정수형으로 변환 (안전을 위해 최대값으로 제한)
+    lwork = static_cast<int>(std::max(work_size_query, (double)(m + n + 64)));
+    std::vector<double> work(lwork);
 
-    return 0;
+    // 3. 실제 SVD 계산
+    // SVD는 A를 덮어쓰므로, Acopy를 사용합니다.
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda, S_values.data(), U.data(), &ldu, Vt.data(), &ldvt, work.data(), &lwork, &info);
+
+    // SVD 계산 오류 체크
+    if (info > 0) {
+        // SVD가 수렴하지 않았거나 문제가 발생했을 경우
+        return std::numeric_limits<double>::infinity();
+    } else if (info < 0) {
+        // 입력 매개변수가 유효하지 않은 경우
+        // 실제 운영 환경에서는 치명적인 오류 처리 필요
+        return -1.0;
+    }
+
+    // 4. 조건수 계산
+
+    // 특이값은 S_values에 내림차순으로 저장됩니다.
+    // sigma_max = S_values(0)
+    // sigma_min = S_values(min_mn - 1)
+
+    double sigma_max = S_values(0);
+    double sigma_min = S_values(min_mn - 1); // 6번째 특이값 (index 5)
+
+    // 가장 작은 특이값이 0에 가깝다면 (특이점)
+    if (sigma_min < std::numeric_limits<double>::epsilon()) {
+        // 최대 특이값도 0이면 모두 0 행렬
+        if (sigma_max < std::numeric_limits<double>::epsilon()) {
+            return 1.0; // 0 행렬의 경우 조건수를 1로 정의하기도 합니다.
+        }
+        return std::numeric_limits<double>::infinity();
+    }
+
+    return sigma_max / sigma_min;
 }
+*/
+
