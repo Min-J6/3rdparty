@@ -43,22 +43,6 @@ mat<12, 6> Jcobian(double q0, double q1, double q2, double q3, double q4, double
 
 
 
-// 관절 제한 구조체
-struct JointLimits {
-    double min_deg;
-    double max_deg;
-};
-
-const std::vector<JointLimits> limits = {
-    {-360.0, 360.0},
-    {-360.0, 360.0},
-    {-0.0, 150.0}, // 예: 3번 관절 제한
-    {-360.0, 360.0},
-    {-360.0, 360.0},
-    {-360.0, 360.0}
-};
-
-
 int main() {
     std::cout << "두산 로봇 M1013 IK - Jacobian 단계 제약조건 통합" << std::endl;
 
@@ -89,12 +73,12 @@ int main() {
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
 
             ImGui::Text("Joint 설정");
-            ImGui::DragFloat("##j1", &q_deg[0], 0.1f, limits[0].min_deg, limits[0].max_deg, "J1: %.3f");
-            ImGui::DragFloat("##j2", &q_deg[1], 0.1f, limits[1].min_deg, limits[1].max_deg, "J2: %.3f");
-            ImGui::DragFloat("##j3", &q_deg[2], 0.1f, limits[2].min_deg, limits[2].max_deg, "J3: %.3f");
-            ImGui::DragFloat("##j4", &q_deg[3], 0.1f, limits[3].min_deg, limits[3].max_deg, "J4: %.3f");
-            ImGui::DragFloat("##j5", &q_deg[4], 0.1f, limits[4].min_deg, limits[4].max_deg, "J5: %.3f");
-            ImGui::DragFloat("##j6", &q_deg[5], 0.1f, limits[5].min_deg, limits[5].max_deg, "J6: %.3f");
+            ImGui::DragFloat("##j1", &q_deg[0], 0.1f, -360.f, 360.f, "J1: %.3f");
+            ImGui::DragFloat("##j2", &q_deg[1], 0.1f, -360.f, 360.f, "J2: %.3f");
+            ImGui::DragFloat("##j3", &q_deg[2], 0.1f, -360.f, 360.f, "J3: %.3f");
+            ImGui::DragFloat("##j4", &q_deg[3], 0.1f, -360.f, 360.f, "J4: %.3f");
+            ImGui::DragFloat("##j5", &q_deg[4], 0.1f, -360.f, 360.f, "J5: %.3f");
+            ImGui::DragFloat("##j6", &q_deg[5], 0.1f, -360.f, 360.f, "J6: %.3f");
             ImGui::Dummy(ImVec2(0, 20));
 
             ImGui::Text("Target Transform 설정");
@@ -166,77 +150,20 @@ int main() {
             mat<12, 6> J = Jcobian(DEG_TO_RAD(q_deg[0]), DEG_TO_RAD(q_deg[1]), DEG_TO_RAD(q_deg[2]),
                                    DEG_TO_RAD(q_deg[3]), DEG_TO_RAD(q_deg[4]), DEG_TO_RAD(q_deg[5]));
 
-            // 3. QP Formulation: min || J*dq - dx ||^2 + lambda || dq ||^2
-            //    전개하면: dq^T * (J^T*J + lambda*I) * dq - 2*(J^T*dx)^T * dq
-            //    H = J^T * J + lambda * I
-            //    g = -J^T * dx
 
-            double lambda = 0.01; // Damping Factor (특이점 방지용)
-            mat<6, 12> J_t = J.transpose();
-            mat<6, 6> H = J_t * J;
+            mat<6, 12> J_inv = pInv(J);
 
-            // Damping 추가 (H 대각 성분에 lambda 더하기)
-            for(int i=0; i<6; i++) H(i,i) += lambda * lambda;
+            vec<6> dq = J_inv * dx * 0.1;
 
-            vec<6> g = -J_t * dx;
+            q_deg[0] += RAD_TO_DEG(dq(0));
+            q_deg[1] += RAD_TO_DEG(dq(1));
+            q_deg[2] += RAD_TO_DEG(dq(2));
+            q_deg[3] += RAD_TO_DEG(dq(3));
+            q_deg[4] += RAD_TO_DEG(dq(4));
+            q_deg[5] += RAD_TO_DEG(dq(5));
 
-            // 4. 제약조건 설정 (Bounds)
-            // 현재 각도에서 한계까지 남은 거리(Distance)를 계산하여 dq의 상하한(lb, ub)으로 설정
-            vec<6> lb, ub;
 
-            for(int i=0; i<6; ++i) {
-                double current_rad = DEG_TO_RAD(q_deg[i]);
-                double min_rad = DEG_TO_RAD(limits[i].min_deg);
-                double max_rad = DEG_TO_RAD(limits[i].max_deg);
 
-                // dq는 "변위"이므로, 현재 위치에서 갈 수 있는 최대/최소 변위를 구함
-                // 안전 여유(Buffer)를 조금 둘 수도 있음
-                lb(i) = (min_rad - current_rad);
-                ub(i) = (max_rad - current_rad);
-
-                // (선택사항) 한 번에 너무 많이 움직이지 않도록 최대 속도 제한을 걸 수도 있음
-                double max_step = DEG_TO_RAD(10.0);
-                lb(i) = std::max(lb(i), -max_step);
-                ub(i) = std::min(ub(i), max_step);
-            }
-
-            // 5. QP Solver 실행 (Active Set / Gauss-Seidel)
-            vec<6> dq;
-
-            // 초기값은 0으로 시작
-            vec<6> x = vec<6>::Zero();
-
-            // Gauss-Seidel 반복 횟수 (보통 10~20번이면 충분히 수렴)
-            const int max_iter = 20;
-
-            for (int iter = 0; iter < max_iter; ++iter) {
-                for (int i = 0; i < 6; ++i) {
-                    // Sigma (H_ij * x_j) 계산 (j != i)
-                    double sigma = 0.0;
-                    for (int j = 0; j < 6; ++j) {
-                        if (i != j) {
-                            sigma += H(i, j) * x(j);
-                        }
-                    }
-
-                    // x_i 업데이트 공식: ( -g_i - sigma ) / H_ii
-                    double val = (-g(i) - sigma) / H(i, i);
-
-                    // [핵심] 계산된 값을 즉시 제약 조건 범위 내로 투영(Project/Clamp)
-                    // 이것이 QP에서 부등식 제약조건을 처리하는 방식입니다.
-                    if (val < lb(i)) val = lb(i);
-                    if (val > ub(i)) val = ub(i);
-
-                    x(i) = val;
-                }
-            }
-
-            dq = x;
-
-            // 6. 업데이트
-            for(int i=0; i<6; ++i) {
-                q_deg[i] += RAD_TO_DEG(dq(i));
-            }
 
 
 
