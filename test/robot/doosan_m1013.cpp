@@ -58,11 +58,6 @@ const std::vector<JointLimits> limits = {
     {-360.0, 360.0}
 };
 
-// vec<6> solve_qp_box_constraints(const mat<6, 6>& H, const vec<6>& g, const vec<6>& lb, const vec<6>& ub)
-// {
-//
-//     return x;
-// }
 
 int main() {
     std::cout << "두산 로봇 M1013 IK - Jacobian 단계 제약조건 통합" << std::endl;
