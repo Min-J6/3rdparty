@@ -31,13 +31,13 @@ using mat4 = Eigen::Matrix4d;
 using vec3 = Eigen::Vector3d;
 using quat = Eigen::Quaterniond;
 using mat3 = Eigen::Matrix3d;
+using AngleAxis = Eigen::AngleAxisd;
 
 
 
 class transform {
 public:
     using Isometry = Eigen::Isometry3d;
-    using AngleAxis = Eigen::AngleAxisd;
 
 
 
@@ -58,9 +58,9 @@ public:
 
     // --- 접근자 (Getters) --- //
     const mat4& matrix()  const         { return T_.matrix();                           }
-    mat3 rotation()       const         { return T_.rotation();                         }
+    vec3 P()              const         { return T_.translation();                      }
+    mat3 R()              const         { return T_.rotation();                         }
     quat quaternion()     const         { return quat(T_.rotation());                   }
-    vec3 translation()    const         { return T_.translation();                      }
 
     double const  z()     const         { return T_.translation().z();                  }
     double const  x()     const         { return T_.translation().x();                  }

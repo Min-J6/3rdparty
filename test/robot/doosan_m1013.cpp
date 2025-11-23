@@ -1,3 +1,5 @@
+#include <chrono>
+
 #include "common_types.h"
 #include "imgui.h"
 #include "implot3d.h"
@@ -11,6 +13,7 @@
 #include <vector>
 #include <string>
 #include <stdexcept>
+#include <bits/this_thread_sleep.h>
 
 
 // 두산 M1013 링크 길이
@@ -37,14 +40,12 @@ AxisObject endEffector(0.06);
 
 
 // 끝단의 매니풀러빌리티와 로봇 링크 관절을 그리는 함수
-void draw_simulation(const mat<12, 6>& j, const transform& fk);
+void draw_simulation(const mat<6, 6>& j, const transform& fk);
 void draw_simulation(const transform& fk);
 
-// 두산 M1013 Jacobian 함수
-mat<6, 6> Jcobian(double q0, double q1, double q2, double q3, double q4, double q5);
 
 mat<6, 6> pInv_DLS(const mat<6, 6>& J) {
-    double lambda = 0.01; // 감쇠 계수 (조정이 필요할 수 있습니다)
+    double lambda = 0.1; // 감쇠 계수
     mat<6, 6> I = mat<6, 6>::Identity();
     mat<6, 6> JJ_T = J * J.transpose();
     mat<6, 6> temp = JJ_T + lambda * lambda * I;
@@ -53,16 +54,242 @@ mat<6, 6> pInv_DLS(const mat<6, 6>& J) {
 
 
 
+class M1013 {
+public:
+    double l1 = 0.135;  // [m]
+    double l2 = 0.1702; // [m]
+    double l3 = 0.411;  // [m]
+    double l4 = 0.164;  // [m]
+    double l5 = 0.368;  // [m]
+    double l6 = 0.1522; // [m]
+    double l7 = 0.146;  // [m]
+    double l8 = 0.121;  // [m]
+
+
+    std::array<double, 6> q_rad;
+    std::array<transform, 8> tf;
+    mat<6, 6> J;
+
+
+    M1013()
+    {
+        J = mat<6, 6>::Zero();
+        fk();
+    }
+
+    transform get_fk(int i)
+    {
+        return tf[i];
+    }
+
+
+    // MoveJ
+    void movej(double q0, double q1, double q2, double q3, double q4, double q5)
+    {
+        q_rad[0] = q0;
+        q_rad[1] = q1;
+        q_rad[2] = q2;
+        q_rad[3] = q3;
+        q_rad[4] = q4;
+        q_rad[5] = q5;
+
+        fk();
+    }
+
+
+    // MoveL
+    void movel(double x, double y, double z, double roll, double pitch, double yaw)
+    {
+        quat t_rot(AngleAxis(yaw, vec3::UnitZ()) *             // Z
+                   AngleAxis(pitch + M_PI_2, vec3::UnitY()) *  // Y
+                   AngleAxis(roll, vec3::UnitZ()));            // Z
+
+        vec3 t_pos(x, y, z);
+
+        transform target_tf(t_rot, t_pos);
+
+        auto q = ik(target_tf);
+        movej(q[0], q[1], q[2], q[3], q[4], q[5]);
+    }
+
+
+private:
+
+    // Forward Kinematics
+    transform fk()
+    {
+        return fk(q_rad[0], q_rad[1], q_rad[2], q_rad[3], q_rad[4], q_rad[5]);
+    }
+
+    transform fk(double q0, double q1, double q2, double q3, double q4, double q5)
+    {
+        // 각 조인트의 transform 계산
+        transform tf0 = transform(quat(AngleAxis(0, vec3::UnitZ())), vec3(0, 0, 0));             // Base
+        transform tf1 = transform(quat(AngleAxis(q0, vec3::UnitZ())), vec3(0, 0, l1));           // Joint 1
+        transform tf2 = transform(quat(AngleAxis(q1, vec3::UnitX())), vec3(-l2, 0, 0));          // Joint 2
+        transform tf3 = transform(quat(AngleAxis(q2, vec3::UnitX())), vec3(0, 0, l3));           // Joint 3
+        transform tf4 = transform(quat(AngleAxis(q3, vec3::UnitZ())), vec3(l4, 0, 0));           // Joint 4
+        transform tf5 = transform(quat(AngleAxis(q4, vec3::UnitX())), vec3(-l6, 0, l5));         // Joint 5
+        transform tf6 = transform(quat(AngleAxis(q5, vec3::UnitZ())), vec3(l7, 0, 0));           // Joint 6
+        transform tf7 = transform(quat(AngleAxis(0, vec3::UnitZ())), vec3(0, 0, l8));            // Tool tip
+
+        // Forward Kinematics
+        tf[0] = tf0;
+        tf[1] = tf[0] * tf1;
+        tf[2] = tf[1] * tf2;
+        tf[3] = tf[2] * tf3;
+        tf[4] = tf[3] * tf4;
+        tf[5] = tf[4] * tf5;
+        tf[6] = tf[5] * tf6;
+        tf[7] = tf[6] * tf7;
+
+        return tf[7]; // End Effector's FK
+    }
+
+
+    // Inverse Kinematics
+    std::array<double, 6> ik(const transform& target_tf)
+    {
+        auto q = q_rad;
+
+
+        // 위치 오차
+        vec3 pos_error = target_tf.P() - fk(q[0], q[1], q[2], q[3], q[4], q[5]).P();
+
+
+        // 회전 오차
+        mat3 R_cur = fk(q[0], q[1], q[2], q[3], q[4], q[5]).R();
+        mat3 R_tar = target_tf.R();
+
+        // 상대 회전 행렬 계산 (R_diff = R_target * R_current^T)
+        // 이 순서로 곱해야 "Global Frame(Base)" 기준의 오차가 계산됨
+        mat3 R_diff = R_tar * R_cur.transpose();
+
+        // 회전 행렬에서 회전 벡터(wx, wy, wz) 추출
+        // 로그 맵(Logarithmic Map) 근사식 이용: v = 0.5 * (R - R^T)
+        vec3 ori_error;
+        ori_error.x() = 0.5 * (R_diff(2, 1) - R_diff(1, 2)); // wx
+        ori_error.y() = 0.5 * (R_diff(0, 2) - R_diff(2, 0)); // wy
+        ori_error.z() = 0.5 * (R_diff(1, 0) - R_diff(0, 1)); // wz
+
+
+
+        // 오차 벡터
+        vec<6> dx;
+        dx <<   pos_error.x(),
+                pos_error.y(),
+                pos_error.z(),
+                ori_error.x(),
+                ori_error.y(),
+                ori_error.z();
+
+
+
+        // 자코비안 행렬
+        J = jacobian(
+                q[0],
+                q[1],
+                q[2],
+                q[3],
+                q[4],
+                q[5]);
+
+
+        // 자코비안 인버스
+        mat<6, 6> J_inv = pInv_DLS(J);
+
+
+        // dq 계산
+        vec<6> dq = J_inv * dx * 0.5;
+
+
+        // 각도 업데이트 [rad]
+        q[0] += dq(0);
+        q[1] += dq(1);
+        q[2] += dq(2);
+        q[3] += dq(3);
+        q[4] += dq(4);
+        q[5] += dq(5);
+
+
+        // 각도 정규화 [rad]
+        q[0] = NORM_RAD_180(q[0]);
+        q[1] = NORM_RAD_180(q[1]);
+        q[2] = NORM_RAD_180(q[2]);
+        q[3] = NORM_RAD_180(q[3]);
+        q[4] = NORM_RAD_180(q[4]);
+        q[5] = NORM_RAD_180(q[5]);
+
+
+        return q;
+    }
+
+
+    // 자코비안 행렬
+    mat<6, 6> jacobian(double q0, double q1, double q2, double q3, double q4, double q5)
+    {
+        mat<6, 6> J_ = mat<6, 6>::Zero();
+
+        double c0 = std::cos(q0);
+        double c1 = std::cos(q1);
+        double c3 = std::cos(q3);
+        double c4 = std::cos(q4);
+        double s0 = std::sin(q0);
+        double s1 = std::sin(q1);
+        double s3 = std::sin(q3);
+        double s4 = std::sin(q4);
+        double c12 = std::cos(q1 + q2);
+        double s12 = std::sin(q1 + q2);
+
+
+        J_(0,0) = l2*s0 + l3*s1*c0 - l4*s0 + l5*s12*c0 + l6*(s0*c3 + s3*c0*c12) - l7*(s0*c3 + s3*c0*c12) - l8*((s0*s3 - c0*c3*c12)*s4 - s12*c0*c4);
+        J_(0,1) = (l3*c1 + l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
+        J_(0,2) = (l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
+        J_(0,3) = l6*(s0*c3*c12 + s3*c0) - l7*(s0*c3*c12 + s3*c0) + l8*(-s0*s3*c12 + c0*c3)*s4;
+        J_(0,4) = l8*((s0*c3*c12 + s3*c0)*c4 - s0*s4*s12);
+        J_(1,0) = -l2*c0 + l3*s0*s1 + l4*c0 + l5*s0*s12 - l6*(-s0*s3*c12 + c0*c3) + l7*(-s0*s3*c12 + c0*c3) + l8*((s0*c3*c12 + s3*c0)*s4 + s0*s12*c4);
+        J_(1,1) = (-l3*c1 - l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
+        J_(1,2) = (-l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
+        J_(1,3) = l6*(s0*s3 - c0*c3*c12) - l7*(s0*s3 - c0*c3*c12) + l8*(s0*c3 + s3*c0*c12)*s4;
+        J_(1,4) = l8*((s0*s3 - c0*c3*c12)*c4 + s4*s12*c0);
+        J_(2,1) = -l3*s1 - l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
+        J_(2,2) = -l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
+        J_(2,3) = (-l6*c3 + l7*c3 + l8*s3*s4)*s12;
+        J_(2,4) = -l8*(s4*c12 + s12*c3*c4);
+        J_(3,1) = c0;
+        J_(3,2) = c0;
+        J_(3,3) = s0*s12;
+        J_(3,4) = -s0*s3*c12 + c0*c3;
+        J_(3,5) = s0*s4*c3*c12 + s0*s12*c4 + s3*s4*c0;
+        J_(4,1) = s0;
+        J_(4,2) = s0;
+        J_(4,3) = -s12*c0;
+        J_(4,4) = s0*c3 + s3*c0*c12;
+        J_(4,5) = s0*s3*s4 - s4*c0*c3*c12 - s12*c0*c4;
+        J_(5,0) = 1;
+        J_(5,3) = c12;
+        J_(5,4) = s3*s12;
+        J_(5,5) = -s4*s12*c3 + c4*c12;
+
+        return J_;
+    }
+
+
+};
+
+
+
+
 int main() {
     std::cout << "두산 로봇 M1013 IK - Jacobian 단계 제약조건 통합" << std::endl;
 
 
-
+    M1013 m1013;
 
     // 기본 자세 설정
     float q_deg[6] = {90.0f, 30.0f, 80.0f, 0.0f, 75.0f, 0.0f};
     vec3 tPos(0.62, 0.0, 0.235);
-    quat qRot(transform::AngleAxis(DEG_TO_RAD(90), vec3(0, 1, 0)));
+    quat qRot(AngleAxis(DEG_TO_RAD(90), vec3(0, 1, 0)));
     transform target_tf(qRot, tPos);
 
     float target_x      = target_tf.x();
@@ -77,6 +304,8 @@ int main() {
 
     while (ImGui::isRunning())
     {
+
+
         ImGui::draw([&]()
         {
             ImGui::Begin("제어");
@@ -103,119 +332,36 @@ int main() {
 
 
 
-            // Target Transform
-            quat target_qRot(transform::AngleAxis(DEG_TO_RAD(target_yaw), vec3::UnitZ()) *
-                                        transform::AngleAxis(DEG_TO_RAD(target_pitch + 90.0), vec3::UnitY()) *
-                                        transform::AngleAxis(DEG_TO_RAD(target_roll), vec3::UnitZ()));
-            target_tf = transform(target_qRot, vec3(target_x, target_y, target_z));
-
-
-
-            // FK
-            transform tf1(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[0]), vec3::UnitZ())), vec3(0, 0, l1));
-            transform tf2(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[1]), vec3::UnitX())), vec3(-l2, 0, 0));
-            transform tf3(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[2]), vec3::UnitX())), vec3(0, 0, l3));
-            transform tf4(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[3]), vec3::UnitZ())), vec3(l4, 0, 0));
-            transform tf5(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[4]), vec3::UnitX())), vec3(-l6, 0, l5));
-            transform tf6(quat(transform::AngleAxis(DEG_TO_RAD(q_deg[5]), vec3::UnitZ())), vec3(l7, 0, 0));
-            transform tf_ee(quat(transform::AngleAxis(DEG_TO_RAD(0), vec3::UnitZ())), vec3(0, 0, l8));
-
-            transform final_tf1 = tf1;
-            transform final_tf2 = final_tf1 * tf2;
-            transform final_tf3 = final_tf2 * tf3;
-            transform final_tf4 = final_tf3 * tf4;
-            transform final_tf5 = final_tf4 * tf5;
-            transform final_tf6 = final_tf5 * tf6;
-            transform final_tf_ee = final_tf6 * tf_ee;
-            transform fk = final_tf_ee;
-
-
-
-            // Axis Transform 설정
-            joint1.setTransform(final_tf1);
-            joint2.setTransform(final_tf2);
-            joint3.setTransform(final_tf3);
-            joint4.setTransform(final_tf4);
-            joint5.setTransform(final_tf5);
-            joint6.setTransform(final_tf6);
-            endEffector.setTransform(final_tf_ee);
-
-
-
-            // IK
-            {
-                // 1. 오차(dx) 계산
-                double error_x = target_tf.x() - fk.x();
-                double error_y = target_tf.y() - fk.y();
-                double error_z = target_tf.z() - fk.z();
-                double current_alpha = atan2(fk(1, 2), fk(0, 2));
-                double current_beta  = acos(fk(2, 2));
-                double current_gamma = atan2(fk(2, 1), -fk(2, 0));
-
-                double target_alpha = atan2(target_tf(1, 2), target_tf(0, 2));
-                double target_beta  = acos(target_tf(2, 2));
-                double target_gamma = atan2(target_tf(2, 1), -target_tf(2, 0));
-
-                double error_roll  = target_alpha - current_alpha;   // Z축 회전 오차 (wx)
-                double error_pitch = target_beta - current_beta;     // Y축 회전 오차 (wy)
-                double error_yaw   = target_gamma - current_gamma;   // Z축 회전 오차 (wz)
-
-
-                vec<6> dx;
-                dx <<   error_x,
-                        error_y,
-                        error_z,
-                        error_roll,
-                        error_pitch,
-                        error_yaw;
-
-
-
-                // 2. Jacobian 계산
-                mat<6, 6> J = Jcobian(
-                        DEG_TO_RAD(q_deg[0]),
-                        DEG_TO_RAD(q_deg[1]),
-                        DEG_TO_RAD(q_deg[2]),
-                        DEG_TO_RAD(q_deg[3]),
-                        DEG_TO_RAD(q_deg[4]),
-                        DEG_TO_RAD(q_deg[5])
-                );
-
-
-                mat<6, 6> J_inv = pInv_DLS(J);
-                vec<6> dq = J_inv * dx * 0.1;
-
-                q_deg[0] += RAD_TO_DEG(dq(0));
-                q_deg[1] += RAD_TO_DEG(dq(1));
-                q_deg[2] += RAD_TO_DEG(dq(2));
-                q_deg[3] += RAD_TO_DEG(dq(3));
-                q_deg[4] += RAD_TO_DEG(dq(4));
-                q_deg[5] += RAD_TO_DEG(dq(5));
-            }
-
-
-
-
-
-
-
 
 
             // Ui
             {
-                ImGui::Text("FK: x=%.3f, y=%.3f, z=%.3f", fk.translation().x(), fk.translation().y(), fk.translation().z());
-                ImGui::Text("FK: roll=%.3f, pitch=%.3f, yaw=%.3f", RAD_TO_DEG(fk.roll()), RAD_TO_DEG(fk.pitch()), RAD_TO_DEG(fk.yaw()));
+                transform tf = m1013.get_fk(7);
+                ImGui::Text("FK: x=%.3f, y=%.3f, z=%.3f", tf.P().x(), tf.P().y(), tf.P().z());
+                ImGui::Text("FK: roll=%.3f, pitch=%.3f, yaw=%.3f", RAD_TO_DEG(tf.roll()), RAD_TO_DEG(tf.pitch()), RAD_TO_DEG(tf.yaw()));
 
                 ImGui::Dummy(ImVec2(0, 10));
 
-                draw_simulation(fk);
+                draw_simulation(m1013.J, tf);
 
             }
-            ImGui::End();
-
-
-
+            ImGui::End(); // "제어"
         });
+
+
+
+
+        // Axis Transform 설정
+        joint1.setTransform(m1013.get_fk(1));
+        joint2.setTransform(m1013.get_fk(2));
+        joint3.setTransform(m1013.get_fk(3));
+        joint4.setTransform(m1013.get_fk(4));
+        joint5.setTransform(m1013.get_fk(5));
+        joint6.setTransform(m1013.get_fk(6));
+        endEffector.setTransform(m1013.get_fk(7));
+        m1013.movel(target_x, target_y, target_z, DEG_TO_RAD(target_roll), DEG_TO_RAD(target_pitch), DEG_TO_RAD(target_yaw));
+
+
     }
     ImGui::stop();
 
@@ -231,7 +377,7 @@ int main() {
 // ------------------------------------------------
 
 
-void draw_simulation(const mat<12, 6>& j, const transform& fk)
+void draw_simulation(const mat<6, 6>& j, const transform& fk)
 {
     ImGui::Begin("시각화");
     if (ImPlot3D::BeginPlot("로봇 FK/IK", ImVec2(-1,-1), ImPlot3DFlags_Equal | ImPlot3DFlags_NoLegend))
@@ -258,7 +404,7 @@ void draw_simulation(const mat<12, 6>& j, const transform& fk)
         DrawLinkLine(joint6, endEffector);
 
         mat<3, 6> j_pos = j.block<3, 6>(0, 0);
-        imgui_draw_manipulability(j_pos, fk.translation(), 0.3f, ImVec4(0,1,1,0.1f));
+        imgui_draw_manipulability(j_pos, fk.P(), 0.3f, ImVec4(0,1,1,0.1f));
 
         ImPlot3D::EndPlot();
     }
@@ -296,50 +442,5 @@ void draw_simulation(const transform& fk)
         ImPlot3D::EndPlot();
     }
     ImGui::End();
-}
-
-
-mat<6, 6> Jcobian(double q0, double q1, double q2, double q3, double q4, double q5)
-{
-    static mat<6, 6> J = mat<6, 6>::Zero();
-
-J(0,0) = l2*std::sin(q0) + l3*std::sin(q1)*std::cos(q0) - l4*std::sin(q0) + l5*(std::sin(q1)*std::cos(q0)*std::cos(q2) + std::sin(q2)*std::cos(q0)*std::cos(q1)) - l6*((std::sin(q1)*std::sin(q2)*std::cos(q0) - std::cos(q0)*std::cos(q1)*std::cos(q2))*std::sin(q3) - std::sin(q0)*std::cos(q3)) + l7*((std::sin(q1)*std::sin(q2)*std::cos(q0) - std::cos(q0)*std::cos(q1)*std::cos(q2))*std::sin(q3) - std::sin(q0)*std::cos(q3)) + l8*((-(std::sin(q1)*std::sin(q2)*std::cos(q0) - std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (std::sin(q1)*std::cos(q0)*std::cos(q2) + std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4));
-J(0,1) = l3*std::sin(q0)*std::cos(q1) + l5*(-std::sin(q0)*std::sin(q1)*std::sin(q2) + std::sin(q0)*std::cos(q1)*std::cos(q2)) - l6*(std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::sin(q3) + l7*(std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::sin(q3) + l8*((-std::sin(q0)*std::sin(q1)*std::sin(q2) + std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q4) - (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::sin(q4)*std::cos(q3));
-J(0,2) = l5*(-std::sin(q0)*std::sin(q1)*std::sin(q2) + std::sin(q0)*std::cos(q1)*std::cos(q2)) - l6*(std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::sin(q3) + l7*(std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::sin(q3) + l8*((-std::sin(q0)*std::sin(q1)*std::sin(q2) + std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q4) - (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::sin(q4)*std::cos(q3));
-J(0,3) = -l6*((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0)) + l7*((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0)) + l8*((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::sin(q3) + std::cos(q0)*std::cos(q3))*std::sin(q4);
-J(0,4) = l8*((-(std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) + std::sin(q3)*std::cos(q0))*std::cos(q4) - (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::sin(q4));
-J(0,5) = 0;
-J(1,0) = -l2*std::cos(q0) + l3*std::sin(q0)*std::sin(q1) + l4*std::cos(q0) + l5*(std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1)) - l6*((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::sin(q3) + std::cos(q0)*std::cos(q3)) + l7*((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::sin(q3) + std::cos(q0)*std::cos(q3)) + l8*((-(std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) + std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4));
-J(1,1) = -l3*std::cos(q0)*std::cos(q1) + l5*(std::sin(q1)*std::sin(q2)*std::cos(q0) - std::cos(q0)*std::cos(q1)*std::cos(q2)) - l6*(-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::sin(q3) + l7*(-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::sin(q3) + l8*((std::sin(q1)*std::sin(q2)*std::cos(q0) - std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::sin(q4)*std::cos(q3));
-J(1,2) = l5*(std::sin(q1)*std::sin(q2)*std::cos(q0) - std::cos(q0)*std::cos(q1)*std::cos(q2)) - l6*(-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::sin(q3) + l7*(-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::sin(q3) + l8*((std::sin(q1)*std::sin(q2)*std::cos(q0) - std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::sin(q4)*std::cos(q3));
-J(1,3) = -l6*((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3)) + l7*((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3)) + l8*((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::sin(q3) + std::sin(q0)*std::cos(q3))*std::sin(q4);
-J(1,4) = l8*((-(-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) + std::sin(q0)*std::sin(q3))*std::cos(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::sin(q4));
-J(1,5) = 0;
-J(2,0) = 0;
-J(2,1) = -l3*std::sin(q1) + l5*(-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1)) - l6*(-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q3) + l7*(-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q3) + l8*((std::sin(q1)*std::sin(q2) - std::cos(q1)*std::cos(q2))*std::sin(q4)*std::cos(q3) + (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::cos(q4));
-J(2,2) = l5*(-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1)) - l6*(-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q3) + l7*(-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q3) + l8*((std::sin(q1)*std::sin(q2) - std::cos(q1)*std::cos(q2))*std::sin(q4)*std::cos(q3) + (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::cos(q4));
-J(2,3) = -l6*(std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3) + l7*(std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3) - l8*(-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q4);
-J(2,4) = l8*(-(-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4));
-J(2,5) = 0;
-J(3,0) = ((-(std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) + std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4))*(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4))/(std::pow(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4), 2) + std::pow(-((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4), 2)) + (((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4))*((-(std::sin(q1)*std::sin(q2)*std::cos(q0) - std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (std::sin(q1)*std::cos(q0)*std::cos(q2) + std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4))/(std::pow(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4), 2) + std::pow(-((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4), 2));
-J(3,1) = (-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4))*((std::sin(q1)*std::sin(q2)*std::cos(q0) - std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::sin(q4)*std::cos(q3))/(std::pow(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4), 2) + std::pow(-((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4), 2)) + (((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4))*((-std::sin(q0)*std::sin(q1)*std::sin(q2) + std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q4) - (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::sin(q4)*std::cos(q3))/(std::pow(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4), 2) + std::pow(-((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4), 2));
-J(3,2) = (-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4))*((std::sin(q1)*std::sin(q2)*std::cos(q0) - std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::sin(q4)*std::cos(q3))/(std::pow(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4), 2) + std::pow(-((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4), 2)) + (((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4))*((-std::sin(q0)*std::sin(q1)*std::sin(q2) + std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q4) - (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::sin(q4)*std::cos(q3))/(std::pow(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4), 2) + std::pow(-((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4), 2));
-J(3,3) = (-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4))*((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::sin(q3) + std::sin(q0)*std::cos(q3))*std::sin(q4)/(std::pow(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4), 2) + std::pow(-((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4), 2)) + (((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4))*((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::sin(q3) + std::cos(q0)*std::cos(q3))*std::sin(q4)/(std::pow(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4), 2) + std::pow(-((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4), 2));
-J(3,4) = ((-(std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) + std::sin(q3)*std::cos(q0))*std::cos(q4) - (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::sin(q4))*(((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4))/(std::pow(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4), 2) + std::pow(-((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4), 2)) + (-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4))*((-(-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) + std::sin(q0)*std::sin(q3))*std::cos(q4) - (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::sin(q4))/(std::pow(-((std::sin(q0)*std::sin(q1)*std::sin(q2) - std::sin(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q3)*std::cos(q0))*std::sin(q4) + (std::sin(q0)*std::sin(q1)*std::cos(q2) + std::sin(q0)*std::sin(q2)*std::cos(q1))*std::cos(q4), 2) + std::pow(-((-std::sin(q1)*std::sin(q2)*std::cos(q0) + std::cos(q0)*std::cos(q1)*std::cos(q2))*std::cos(q3) - std::sin(q0)*std::sin(q3))*std::sin(q4) + (-std::sin(q1)*std::cos(q0)*std::cos(q2) - std::sin(q2)*std::cos(q0)*std::cos(q1))*std::cos(q4), 2));
-J(3,5) = 0;
-J(4,0) = 0;
-J(4,1) = -((std::sin(q1)*std::sin(q2) - std::cos(q1)*std::cos(q2))*std::sin(q4)*std::cos(q3) + (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::cos(q4))/std::sqrt(1 - std::pow((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::cos(q4) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q4)*std::cos(q3), 2));
-J(4,2) = -((std::sin(q1)*std::sin(q2) - std::cos(q1)*std::cos(q2))*std::sin(q4)*std::cos(q3) + (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::cos(q4))/std::sqrt(1 - std::pow((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::cos(q4) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q4)*std::cos(q3), 2));
-J(4,3) = (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q4)/std::sqrt(1 - std::pow((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::cos(q4) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q4)*std::cos(q3), 2));
-J(4,4) = -(-(-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))/std::sqrt(1 - std::pow((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::cos(q4) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q4)*std::cos(q3), 2));
-J(4,5) = 0;
-J(5,0) = 0;
-J(5,1) = (-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5))*((std::sin(q1)*std::sin(q2) - std::cos(q1)*std::cos(q2))*std::sin(q3)*std::sin(q5) + ((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::cos(q3)*std::cos(q4) + (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::sin(q4))*std::cos(q5))/(std::pow(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5), 2) + std::pow(((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5), 2)) + (-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5))*((std::sin(q1)*std::sin(q2) - std::cos(q1)*std::cos(q2))*std::sin(q3)*std::cos(q5) + (-(-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::cos(q3)*std::cos(q4) - (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::sin(q4))*std::sin(q5))/(std::pow(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5), 2) + std::pow(((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5), 2));
-J(5,2) = (-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5))*((std::sin(q1)*std::sin(q2) - std::cos(q1)*std::cos(q2))*std::sin(q3)*std::sin(q5) + ((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::cos(q3)*std::cos(q4) + (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::sin(q4))*std::cos(q5))/(std::pow(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5), 2) + std::pow(((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5), 2)) + (-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5))*((std::sin(q1)*std::sin(q2) - std::cos(q1)*std::cos(q2))*std::sin(q3)*std::cos(q5) + (-(-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::cos(q3)*std::cos(q4) - (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::sin(q4))*std::sin(q5))/(std::pow(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5), 2) + std::pow(((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5), 2));
-J(5,3) = (-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5))*((-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::sin(q5)*std::cos(q3) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q4)*std::cos(q5))/(std::pow(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5), 2) + std::pow(((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5), 2)) + (-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5))*((-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q5) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5)*std::cos(q4))/(std::pow(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5), 2) + std::pow(((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5), 2));
-J(5,4) = (-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5))*((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::cos(q4) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q4)*std::cos(q3))*std::cos(q5)/(std::pow(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5), 2) + std::pow(((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5), 2)) + (-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5))*(-(-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::cos(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q4)*std::cos(q3))*std::sin(q5)/(std::pow(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5), 2) + std::pow(((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5), 2));
-J(5,5) = ((-(-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5))*(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5))/(std::pow(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5), 2) + std::pow(((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5), 2)) + (-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) + (-std::sin(q1)*std::cos(q2) - std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5))*(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5))/(std::pow(-((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::sin(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::cos(q5), 2) + std::pow(((-std::sin(q1)*std::sin(q2) + std::cos(q1)*std::cos(q2))*std::sin(q4) + (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::cos(q3)*std::cos(q4))*std::cos(q5) - (std::sin(q1)*std::cos(q2) + std::sin(q2)*std::cos(q1))*std::sin(q3)*std::sin(q5), 2));
-
-    return J;
 }
 
