@@ -6,10 +6,11 @@
 #include "robot/transform.h"
 #include "robot/jacobian_inverse.h"
 #include "robot/imgui_draw_manipulability.hpp"
-
+#include "live_logger.h"
 
 #include <iostream>
 #include <cmath>
+#include <optional>
 #include <vector>
 #include <string>
 #include <stdexcept>
@@ -36,7 +37,8 @@ AxisObject joint3(0.05);
 AxisObject joint4(0.05);
 AxisObject joint5(0.05);
 AxisObject joint6(0.05);
-AxisObject endEffector(0.06);
+AxisObject t_tip(0.06);
+AxisObject end_effector(0.06);
 
 
 // 끝단의 매니풀러빌리티와 로봇 링크 관절을 그리는 함수
@@ -54,32 +56,56 @@ mat<6, 6> pInv_DLS(const mat<6, 6>& J) {
 
 
 
+
+
 class M1013 {
+    // 관절 제한 구조체
+    struct JointLimits {
+        double min; // [rad]
+        double max; // [rad]
+    };
+
+
 public:
-    double l1 = 0.135;  // [m]
-    double l2 = 0.1702; // [m]
-    double l3 = 0.411;  // [m]
-    double l4 = 0.164;  // [m]
-    double l5 = 0.368;  // [m]
-    double l6 = 0.1522; // [m]
-    double l7 = 0.146;  // [m]
-    double l8 = 0.121;  // [m]
+    // ----------------------------------
+    // 제어 함수
+    // ----------------------------------
 
+    std::array<double, 6> q_rad;        // 각 Joint 각도 [rad]
+    std::array<transform, 8> tf;        // 각 조인트의 transform
+    std::optional<transform> tf_ee;     // 엔드 이펙터 transform
 
-    std::array<double, 6> q_rad;
-    std::array<transform, 8> tf;
-    mat<6, 6> J;
+    std::array<JointLimits, 6> limits;  // 각도 제한 조건
+
+    mat<6, 6> J;                        // 자코비안 매트릭스
+    double lambda;                      // Damping Factor (특이점 방지용)
 
 
     M1013()
     {
+        limits[0] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+        limits[1] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+        limits[2] = {DEG_TO_RAD(-150.0), DEG_TO_RAD(150.0)};
+        limits[3] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+        limits[4] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+        limits[5] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+
+        lambda = 0.01;
+
         J = mat<6, 6>::Zero();
+
         fk();
     }
 
     transform get_fk(int i)
     {
         return tf[i];
+    }
+
+
+    void set_end_effector_tf(const transform& tf)
+    {
+        tf_ee = tf;
     }
 
 
@@ -114,12 +140,17 @@ public:
 
 
 private:
+    // ----------------------------------
+    // 기구학 연산 함수들
+    // ----------------------------------
 
     // Forward Kinematics
     transform fk()
     {
         return fk(q_rad[0], q_rad[1], q_rad[2], q_rad[3], q_rad[4], q_rad[5]);
     }
+
+
 
     transform fk(double q0, double q1, double q2, double q3, double q4, double q5)
     {
@@ -133,6 +164,8 @@ private:
         transform tf6 = transform(quat(AngleAxis(q5, vec3::UnitZ())), vec3(l7, 0, 0));           // Joint 6
         transform tf7 = transform(quat(AngleAxis(0, vec3::UnitZ())), vec3(0, 0, l8));            // Tool tip
 
+
+
         // Forward Kinematics
         tf[0] = tf0;
         tf[1] = tf[0] * tf1;
@@ -142,6 +175,11 @@ private:
         tf[5] = tf[4] * tf5;
         tf[6] = tf[5] * tf6;
         tf[7] = tf[6] * tf7;
+
+        if (tf_ee)
+        {
+            tf[7] = tf[7] * tf_ee.value();
+        }
 
         return tf[7]; // End Effector's FK
     }
@@ -184,41 +222,79 @@ private:
                 ori_error.z();
 
 
-
         // 자코비안 행렬
-        J = jacobian(
-                q[0],
-                q[1],
-                q[2],
-                q[3],
-                q[4],
-                q[5]);
+        J = jacobian( q[0], q[1], q[2], q[3], q[4], q[5] );
 
 
-        // 자코비안 인버스
-        mat<6, 6> J_inv = pInv_DLS(J);
 
 
-        // dq 계산
-        vec<6> dq = J_inv * dx * 0.5;
+        // QP Formulation: min || J*dq - dx ||^2 + lambda || dq ||^2
+        // 전개하면: dq^T * (J^T*J + lambda*I) * dq - 2*(J^T*dx)^T * dq
+        // H = J^T * J + lambda * I
+        // g = -J^T * dx
+
+        mat<6, 6> J_t = J.transpose();
+        mat<6, 6> H = J_t * J;
+        vec<6> g = -J_t * dx;
 
 
-        // 각도 업데이트 [rad]
-        q[0] += dq(0);
-        q[1] += dq(1);
-        q[2] += dq(2);
-        q[3] += dq(3);
-        q[4] += dq(4);
-        q[5] += dq(5);
+        // Damping 추가 (H 대각 성분에 lambda 더하기)
+        for (int i = 0; i < 6; ++i)
+            H(i,i) += lambda * lambda;
 
 
-        // 각도 정규화 [rad]
-        q[0] = NORM_RAD_180(q[0]);
-        q[1] = NORM_RAD_180(q[1]);
-        q[2] = NORM_RAD_180(q[2]);
-        q[3] = NORM_RAD_180(q[3]);
-        q[4] = NORM_RAD_180(q[4]);
-        q[5] = NORM_RAD_180(q[5]);
+
+
+        // 제약조건 설정 (Bounds)
+        // 현재 각도에서 한계까지 남은 거리(Distance)를 계산하여 dq의 상하한(lb, ub)으로 설정
+        vec<6> lb, ub;
+
+        for(int i=0; i<6; ++i) {
+            double current_rad = q[i];
+            double min_rad = limits[i].min;
+            double max_rad = limits[i].max;
+
+            // dq는 "변위"이므로, 현재 위치에서 갈 수 있는 최대/최소 변위를 구함
+            // 안전 여유(Buffer)를 조금 둘 수도 있음
+            lb(i) = (min_rad - current_rad);
+            ub(i) = (max_rad - current_rad);
+
+            // 한 번에 너무 많이 움직이지 않도록 최대 속도 제한을 걸 수도 있음
+            double max_step = DEG_TO_RAD(30.0);
+            lb(i) = std::max(lb(i), -max_step);
+            ub(i) = std::min(ub(i), max_step);
+        }
+
+
+        // QP Solver 실행
+        vec<6> dq = vec<6>::Zero();
+        const int max_iter = 20; // Gauss-Seidel 반복 횟수 (보통 10~20번이면 충분히 수렴)
+
+        for (int iter = 0; iter < max_iter; ++iter) {
+            for (int i = 0; i < 6; ++i) {
+                // Sigma (H_ij * x_j) 계산 (j != i)
+                double sigma = 0.0;
+                for (int j = 0; j < 6; ++j) {
+                    if (i != j) {
+                        sigma += H(i, j) * dq(j);
+                    }
+                }
+
+                // x_i 업데이트 공식: ( -g_i - sigma ) / H_ii
+                double val = (-g(i) - sigma) / H(i, i);
+
+                // 계산된 값을 즉시 제약 조건 범위 내로 투영(Project/Clamp)
+                if (val < lb(i)) val = lb(i);
+                if (val > ub(i)) val = ub(i);
+
+                dq(i) = val;
+            }
+        }
+
+
+        // 최종 각도 업데이트
+        for (int i = 0; i < 6; ++i)
+            q[i] = NORM_RAD_180(q[i] + dq(i) * 0.5);
 
 
         return q;
@@ -275,6 +351,18 @@ private:
     }
 
 
+
+
+
+    // M1013 관절 길이
+    double l1 = 0.135;  // [m]
+    double l2 = 0.1702; // [m]
+    double l3 = 0.411;  // [m]
+    double l4 = 0.164;  // [m]
+    double l5 = 0.368;  // [m]
+    double l6 = 0.1522; // [m]
+    double l7 = 0.146;  // [m]
+    double l8 = 0.121;  // [m]
 };
 
 
@@ -289,7 +377,7 @@ int main() {
     // 기본 자세 설정
     float q_deg[6] = {90.0f, 30.0f, 80.0f, 0.0f, 75.0f, 0.0f};
     vec3 tPos(0.62, 0.0, 0.235);
-    quat qRot(AngleAxis(DEG_TO_RAD(90), vec3(0, 1, 0)));
+    quat qRot(AngleAxis(DEG_TO_RAD(0), vec3(0, 1, 0)));
     transform target_tf(qRot, tPos);
 
     float target_x      = target_tf.x();
@@ -298,6 +386,14 @@ int main() {
     float target_roll   = RAD_TO_DEG(target_tf.roll());
     float target_pitch  = RAD_TO_DEG(target_tf.pitch());
     float target_yaw    = RAD_TO_DEG(target_tf.yaw());
+
+
+
+    transform tf_ee = transform(
+        quat(AngleAxis(DEG_TO_RAD(0), vec3::UnitY())),
+        vec3(0, 0.1, 0.0));
+
+    m1013.set_end_effector_tf(tf_ee);
 
 
     ImGui::start("데모");
@@ -311,13 +407,21 @@ int main() {
             ImGui::Begin("제어");
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
 
+            bool is_joint_change = false;
+            float q0 = RAD_TO_DEG(m1013.q_rad[0]);
+            float q1 = RAD_TO_DEG(m1013.q_rad[1]);
+            float q2 = RAD_TO_DEG(m1013.q_rad[2]);
+            float q3 = RAD_TO_DEG(m1013.q_rad[3]);
+            float q4 = RAD_TO_DEG(m1013.q_rad[4]);
+            float q5 = RAD_TO_DEG(m1013.q_rad[5]);
+
             ImGui::Text("Joint 설정");
-            ImGui::DragFloat("##j1", &q_deg[0], 0.1f, -360.f, 360.f, "J1: %.3f");
-            ImGui::DragFloat("##j2", &q_deg[1], 0.1f, -360.f, 360.f, "J2: %.3f");
-            ImGui::DragFloat("##j3", &q_deg[2], 0.1f, -360.f, 360.f, "J3: %.3f");
-            ImGui::DragFloat("##j4", &q_deg[3], 0.1f, -360.f, 360.f, "J4: %.3f");
-            ImGui::DragFloat("##j5", &q_deg[4], 0.1f, -360.f, 360.f, "J5: %.3f");
-            ImGui::DragFloat("##j6", &q_deg[5], 0.1f, -360.f, 360.f, "J6: %.3f");
+            is_joint_change |= ImGui::DragFloat("##j1", &q0, 0.1f, -360.f, 360.f, "J1: %.3f");
+            is_joint_change |= ImGui::DragFloat("##j2", &q1, 0.1f, -360.f, 360.f, "J2: %.3f");
+            is_joint_change |= ImGui::DragFloat("##j3", &q2, 0.1f, -360.f, 360.f, "J3: %.3f");
+            is_joint_change |= ImGui::DragFloat("##j4", &q3, 0.1f, -360.f, 360.f, "J4: %.3f");
+            is_joint_change |= ImGui::DragFloat("##j5", &q4, 0.1f, -360.f, 360.f, "J5: %.3f");
+            is_joint_change |= ImGui::DragFloat("##j6", &q5, 0.1f, -360.f, 360.f, "J6: %.3f");
             ImGui::Dummy(ImVec2(0, 20));
 
             ImGui::Text("Target Transform 설정");
@@ -330,7 +434,22 @@ int main() {
             ImGui::DragFloat("##Target Yaw", &target_yaw, 1.0f, -180.0f, 180.0f, "Yaw: %.3f");
             ImGui::PopItemWidth();
 
+            if (is_joint_change)
+            {
+                m1013.movej(DEG_TO_RAD(q0), DEG_TO_RAD(q1), DEG_TO_RAD(q2), DEG_TO_RAD(q3), DEG_TO_RAD(q4), DEG_TO_RAD(q5));
+            }
 
+
+
+            // Axis Transform 설정
+            joint1.setTransform(m1013.get_fk(1));
+            joint2.setTransform(m1013.get_fk(2));
+            joint3.setTransform(m1013.get_fk(3));
+            joint4.setTransform(m1013.get_fk(4));
+            joint5.setTransform(m1013.get_fk(5));
+            joint6.setTransform(m1013.get_fk(6));
+            t_tip.setTransform(m1013.get_fk(7));
+            m1013.movel(target_x, target_y, target_z, DEG_TO_RAD(target_roll), DEG_TO_RAD(target_pitch), DEG_TO_RAD(target_yaw));
 
 
 
@@ -351,15 +470,7 @@ int main() {
 
 
 
-        // Axis Transform 설정
-        joint1.setTransform(m1013.get_fk(1));
-        joint2.setTransform(m1013.get_fk(2));
-        joint3.setTransform(m1013.get_fk(3));
-        joint4.setTransform(m1013.get_fk(4));
-        joint5.setTransform(m1013.get_fk(5));
-        joint6.setTransform(m1013.get_fk(6));
-        endEffector.setTransform(m1013.get_fk(7));
-        m1013.movel(target_x, target_y, target_z, DEG_TO_RAD(target_roll), DEG_TO_RAD(target_pitch), DEG_TO_RAD(target_yaw));
+
 
 
     }
@@ -393,7 +504,8 @@ void draw_simulation(const mat<6, 6>& j, const transform& fk)
         joint4.Draw();
         joint5.Draw();
         joint6.Draw();
-        endEffector.Draw();
+        t_tip.Draw();
+        end_effector.Draw();
 
         DrawLinkLine(base, joint1);
         DrawLinkLine(joint1, joint2);
@@ -401,7 +513,7 @@ void draw_simulation(const mat<6, 6>& j, const transform& fk)
         DrawLinkLine(joint3, joint4);
         DrawLinkLine(joint4, joint5);
         DrawLinkLine(joint5, joint6);
-        DrawLinkLine(joint6, endEffector);
+        DrawLinkLine(joint6, t_tip);
 
         mat<3, 6> j_pos = j.block<3, 6>(0, 0);
         imgui_draw_manipulability(j_pos, fk.P(), 0.3f, ImVec4(0,1,1,0.1f));
@@ -428,7 +540,7 @@ void draw_simulation(const transform& fk)
         joint4.Draw();
         joint5.Draw();
         joint6.Draw();
-        endEffector.Draw();
+        t_tip.Draw();
 
         DrawLinkLine(base, joint1);
         DrawLinkLine(joint1, joint2);
@@ -436,11 +548,10 @@ void draw_simulation(const transform& fk)
         DrawLinkLine(joint3, joint4);
         DrawLinkLine(joint4, joint5);
         DrawLinkLine(joint5, joint6);
-        DrawLinkLine(joint6, endEffector);
+        DrawLinkLine(joint6, t_tip);
 
 
         ImPlot3D::EndPlot();
     }
     ImGui::End();
 }
-
