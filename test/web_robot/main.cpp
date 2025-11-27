@@ -313,7 +313,7 @@ private:
 
 
     // Inverse Kinematics
-    std::array<double, 6> ik(const transform& target_tf)
+        std::array<double, 6> ik(const transform& target_tf)
     {
         auto q = q_rad;
 
@@ -352,16 +352,6 @@ private:
         // 자코비안 행렬
         J = jacobian( q[0], q[1], q[2], q[3], q[4], q[5] );
 
-        auto J_inv = pInv_DLS(J);
-
-        vec<6> dq = J_inv * dx * 0.1;
-        q[0] += dq(0);
-        q[1] += dq(1);
-        q[2] += dq(2);
-        q[3] += dq(3);
-        q[4] += dq(4);
-        q[5] += dq(5);
-
 
 
 
@@ -370,68 +360,68 @@ private:
         // H = J^T * J + lambda * I
         // g = -J^T * dx
 
-        // mat<6, 6> J_t = J.transpose();
-        // mat<6, 6> H = J_t * J;
-        // vec<6> g = -J_t * dx;
-        //
-        //
-        // // Damping 추가 (H 대각 성분에 lambda 더하기)
-        // for (int i = 0; i < 6; ++i)
-        //     H(i,i) += lambda * lambda;
-        //
-        //
-        //
-        //
-        // // 제약조건 설정 (Bounds)
-        // // 현재 각도에서 한계까지 남은 거리(Distance)를 계산하여 dq의 상하한(lb, ub)으로 설정
-        // vec<6> lb, ub;
-        //
-        // for(int i=0; i<6; ++i) {
-        //     double current_rad = q[i];
-        //     double min_rad = limits[i].min;
-        //     double max_rad = limits[i].max;
-        //
-        //     // dq는 "변위"이므로, 현재 위치에서 갈 수 있는 최대/최소 변위를 구함
-        //     // 안전 여유(Buffer)를 조금 둘 수도 있음
-        //     lb(i) = (min_rad - current_rad);
-        //     ub(i) = (max_rad - current_rad);
-        //
-        //     // 한 번에 너무 많이 움직이지 않도록 최대 속도 제한을 걸 수도 있음
-        //     double max_step = DEG_TO_RAD(30.0);
-        //     lb(i) = std::max(lb(i), -max_step);
-        //     ub(i) = std::min(ub(i), max_step);
-        // }
-        //
-        //
-        // // QP Solver 실행
-        // vec<6> dq = vec<6>::Zero();
-        // const int max_iter = 20; // Gauss-Seidel 반복 횟수 (보통 10~20번이면 충분히 수렴)
-        //
-        // for (int iter = 0; iter < max_iter; ++iter) {
-        //     for (int i = 0; i < 6; ++i) {
-        //         // Sigma (H_ij * x_j) 계산 (j != i)
-        //         double sigma = 0.0;
-        //         for (int j = 0; j < 6; ++j) {
-        //             if (i != j) {
-        //                 sigma += H(i, j) * dq(j);
-        //             }
-        //         }
-        //
-        //         // x_i 업데이트 공식: ( -g_i - sigma ) / H_ii
-        //         double val = (-g(i) - sigma) / H(i, i);
-        //
-        //         // 계산된 값을 즉시 제약 조건 범위 내로 투영(Project/Clamp)
-        //         if (val < lb(i)) val = lb(i);
-        //         if (val > ub(i)) val = ub(i);
-        //
-        //         dq(i) = val;
-        //     }
-        // }
-        //
-        //
-        // // 최종 각도 업데이트
-        // for (int i = 0; i < 6; ++i)
-        //     q[i] = NORM_RAD_180(q[i] + dq(i) * 0.5);
+        mat<6, 6> J_t = J.transpose();
+        mat<6, 6> H = J_t * J;
+        vec<6> g = -J_t * dx;
+
+
+        // Damping 추가 (H 대각 성분에 lambda 더하기)
+        for (int i = 0; i < 6; ++i)
+            H(i,i) += lambda * lambda;
+
+
+
+
+        // 제약조건 설정 (Bounds)
+        // 현재 각도에서 한계까지 남은 거리(Distance)를 계산하여 dq의 상하한(lb, ub)으로 설정
+        vec<6> lb, ub;
+
+        for(int i=0; i<6; ++i) {
+            double current_rad = q[i];
+            double min_rad = limits[i].min;
+            double max_rad = limits[i].max;
+
+            // dq는 "변위"이므로, 현재 위치에서 갈 수 있는 최대/최소 변위를 구함
+            // 안전 여유(Buffer)를 조금 둘 수도 있음
+            lb(i) = (min_rad - current_rad);
+            ub(i) = (max_rad - current_rad);
+
+            // 한 번에 너무 많이 움직이지 않도록 최대 속도 제한을 걸 수도 있음
+            double max_step = DEG_TO_RAD(30.0);
+            lb(i) = std::max(lb(i), -max_step);
+            ub(i) = std::min(ub(i), max_step);
+        }
+
+
+        // QP Solver 실행
+        vec<6> dq = vec<6>::Zero();
+        const int max_iter = 20; // Gauss-Seidel 반복 횟수 (보통 10~20번이면 충분히 수렴)
+
+        for (int iter = 0; iter < max_iter; ++iter) {
+            for (int i = 0; i < 6; ++i) {
+                // Sigma (H_ij * x_j) 계산 (j != i)
+                double sigma = 0.0;
+                for (int j = 0; j < 6; ++j) {
+                    if (i != j) {
+                        sigma += H(i, j) * dq(j);
+                    }
+                }
+
+                // x_i 업데이트 공식: ( -g_i - sigma ) / H_ii
+                double val = (-g(i) - sigma) / H(i, i);
+
+                // 계산된 값을 즉시 제약 조건 범위 내로 투영(Project/Clamp)
+                if (val < lb(i)) val = lb(i);
+                if (val > ub(i)) val = ub(i);
+
+                dq(i) = val;
+            }
+        }
+
+
+        // 최종 각도 업데이트
+        for (int i = 0; i < 6; ++i)
+            q[i] = NORM_RAD_180(q[i] + dq(i) * 0.5);
 
 
         return q;
@@ -492,15 +482,17 @@ private:
 
 
     // M1013 관절 길이
-    double l1 = 0.135;  // [m]
-    double l2 = 0.1702; // [m]
-    double l3 = 0.411;  // [m]
-    double l4 = 0.164;  // [m]
-    double l5 = 0.368;  // [m]
-    double l6 = 0.1522; // [m]
-    double l7 = 0.146;  // [m]
-    double l8 = 0.121;  // [m]
+    double l1 = 0.1525; // [m]
+    double l2 = 0.1985; // [m]
+    double l3 = 0.620; // [m]
+    double l4 = 0.164; // [m]
+    double l5 = 0.559; // [m]
+    double l6 = 0.146; // [m]
+    double l7 = 0.146; // [m]
+    double l8 = 0.121; // [m]
 };
+
+
 
 
 M1013 m1013;
