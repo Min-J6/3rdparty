@@ -82,14 +82,14 @@ public:
 
     M1013()
     {
-        limits[0] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+        limits[0] = {DEG_TO_RAD(-0.0), DEG_TO_RAD(180.0)};
         limits[1] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
-        limits[2] = {DEG_TO_RAD(-150.0), DEG_TO_RAD(150.0)};
+        limits[2] = {DEG_TO_RAD(-0.0), DEG_TO_RAD(160.0)};
         limits[3] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         limits[4] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         limits[5] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
 
-        lambda = 0.001;
+        lambda = 0.1;
 
         J = mat<6, 6>::Zero();
 
@@ -187,97 +187,94 @@ private:
 
     // Inverse Kinematics
     std::array<double, 6> ik(const Transform& target_tf)
+{
+    // 초기 각도 설정
+    auto q = q_rad;
+
+    const int max_ik_iter = 200; // ✨ 최대 IK 반복 횟수
+    const double convergence_threshold = 1e-4; // ✨ 수렴 임계값 (예: 위치/회전 오차 크기)
+    const double step_rate = 0.01; // 최종 각도 업데이트 시 적용할 학습률/스텝 크기
+
+    for (int ik_iter = 0; ik_iter < max_ik_iter; ++ik_iter)
     {
+        // ----------------------------------------------------
+        // 1. 오차 계산 (위치 + 회전)
+        // ----------------------------------------------------
 
-        // delta time
-        static auto now = std::chrono::high_resolution_clock::now();
-        static auto last = now;
-        now = std::chrono::high_resolution_clock::now();
-        double dt = std::chrono::duration_cast<std::chrono::microseconds>(now - last).count() * 0.001;
-
-        auto q = q_rad;
-
+        // 현재 FK 계산
+        Transform current_tf = fk(q[0], q[1], q[2], q[3], q[4], q[5]);
 
         // 위치 오차
-        vec3 pos_error = target_tf.trans() - fk(q[0], q[1], q[2], q[3], q[4], q[5]).trans();
-
+        vec3 pos_error = target_tf.trans() - current_tf.trans();
 
         // 회전 오차
-        mat3 R_cur = fk(q[0], q[1], q[2], q[3], q[4], q[5]).rot();
+        mat3 R_cur = current_tf.rot();
         mat3 R_tar = target_tf.rot();
+        mat3 R_diff = R_tar * R_cur.transpose(); // Global Frame 기준 오차
 
-        // 상대 회전 행렬 계산 (R_diff = R_target * R_current^T)
-        // 이 순서로 곱해야 "Global Frame(Base)" 기준의 오차가 계산됨
-        mat3 R_diff = R_tar * R_cur.transpose();
-
-        // 회전 행렬에서 회전 벡터(wx, wy, wz) 추출
-        // 로그 맵(Logarithmic Map) 근사식 이용: v = 0.5 * (R - R^T)
         vec3 ori_error;
+        // 로그 맵(Logarithmic Map) 근사식: v = 0.5 * (R - R^T)
         ori_error.x() = 0.5 * (R_diff(2, 1) - R_diff(1, 2)); // wx
         ori_error.y() = 0.5 * (R_diff(0, 2) - R_diff(2, 0)); // wy
         ori_error.z() = 0.5 * (R_diff(1, 0) - R_diff(0, 1)); // wz
 
-
-
-        // 오차 벡터
+        // 오차 벡터 dx (6x1)
         vec<6> dx;
-        dx <<   pos_error.x(),
-                pos_error.y(),
-                pos_error.z(),
-                ori_error.x(),
-                ori_error.y(),
-                ori_error.z();
+        dx <<   pos_error.x(), pos_error.y(), pos_error.z(),
+                ori_error.x(), ori_error.y(), ori_error.z();
 
+        // ✨ 수렴 조건 확인
+        // 오차 벡터의 크기(노름)가 임계값보다 작으면 반복 중단
+        if (dx.norm() < convergence_threshold) {
+            break;
+        }
 
-        // 자코비안 행렬
+        // ----------------------------------------------------
+        // 2. 자코비안 계산
+        // ----------------------------------------------------
         J = jacobian( q[0], q[1], q[2], q[3], q[4], q[5] );
 
-
-
-
-        // QP Formulation: min || J*dq - dx ||^2 + lambda || dq ||^2
-        // 전개하면: dq^T * (J^T*J + lambda*I) * dq - 2*(J^T*dx)^T * dq
-        // H = J^T * J + lambda * I
-        // g = -J^T * dx
-
+        // ----------------------------------------------------
+        // 3. QP Formulation (Hessian, Gradient)
+        //    min || J*dq - dx ||^2 + lambda || dq ||^2
+        //    H = J^T*J + lambda*I,  g = -J^T*dx
+        // ----------------------------------------------------
         mat<6, 6> J_t = J.transpose();
         mat<6, 6> H = J_t * J;
         vec<6> g = -J_t * dx;
 
-
-        // Damping 추가 (H 대각 성분에 lambda 더하기)
+        // Damping 추가 (Hessian 대각 성분에 lambda^2 더하기)
+        // Damping (lambda) 값은 외부 변수로 가정합니다.
         for (int i = 0; i < 6; ++i)
             H(i,i) += lambda * lambda;
 
-
-
-
-        // 제약조건 설정 (Bounds)
-        // 현재 각도에서 한계까지 남은 거리(Distance)를 계산하여 dq의 상하한(lb, ub)으로 설정
+        // ----------------------------------------------------
+        // 4. 제약조건 (Bounds) 설정
+        // ----------------------------------------------------
         vec<6> lb, ub;
+        double max_step = DEG_TO_RAD(10.0); // 최대 각속도/변위 제한
 
         for(int i=0; i<6; ++i) {
             double current_rad = q[i];
             double min_rad = limits[i].min;
             double max_rad = limits[i].max;
 
-            // dq는 "변위"이므로, 현재 위치에서 갈 수 있는 최대/최소 변위를 구함
-            // 안전 여유(Buffer)를 조금 둘 수도 있음
+            // 관절 한계에 의한 상하한
             lb(i) = (min_rad - current_rad);
             ub(i) = (max_rad - current_rad);
 
-            // 한 번에 너무 많이 움직이지 않도록 최대 속도 제한을 걸 수도 있음
-            double max_step = DEG_TO_RAD(10.0) * dt;
+            // 최대 스텝 크기에 의한 상하한
             lb(i) = std::max(lb(i), -max_step);
             ub(i) = std::min(ub(i), max_step);
         }
 
-
-        // QP Solver 실행
+        // ----------------------------------------------------
+        // 5. QP Solver 실행 (Gauss-Seidel 반복)
+        // ----------------------------------------------------
         vec<6> dq = vec<6>::Zero();
-        const int max_iter = 20; // Gauss-Seidel 반복 횟수 (보통 10~20번이면 충분히 수렴)
+        const int max_gs_iter = 20; // Gauss-Seidel 내부 반복 횟수
 
-        for (int iter = 0; iter < max_iter; ++iter) {
+        for (int gs_iter = 0; gs_iter < max_gs_iter; ++gs_iter) {
             for (int i = 0; i < 6; ++i) {
                 // Sigma (H_ij * x_j) 계산 (j != i)
                 double sigma = 0.0;
@@ -290,7 +287,7 @@ private:
                 // x_i 업데이트 공식: ( -g_i - sigma ) / H_ii
                 double val = (-g(i) - sigma) / H(i, i);
 
-                // 계산된 값을 즉시 제약 조건 범위 내로 투영(Project/Clamp)
+                // 제약 조건 범위 내로 투영(Project/Clamp)
                 if (val < lb(i)) val = lb(i);
                 if (val > ub(i)) val = ub(i);
 
@@ -298,14 +295,18 @@ private:
             }
         }
 
-
-        // 최종 각도 업데이트
-        for (int i = 0; i < 6; ++i)
-            q[i] = NORM_RAD_180(q[i] + dq(i) * 0.5);
-
-
-        return q;
+        // ----------------------------------------------------
+        // 6. 최종 각도 업데이트
+        // ----------------------------------------------------
+        for (int i = 0; i < 6; ++i) {
+            // dq를 적용하고, 각도 정규화 (예: -180도 ~ +180도)
+            q[i] = NORM_RAD_180(q[i] + dq(i) * step_rate);
+        }
     }
+
+
+    return q;
+}
 
 
     // 자코비안 행렬
@@ -362,14 +363,14 @@ private:
 
 
     // M1013 관절 길이
-    double l1 = 0.135;  // [m]
-    double l2 = 0.1702; // [m]
-    double l3 = 0.411;  // [m]
-    double l4 = 0.164;  // [m]
-    double l5 = 0.368;  // [m]
-    double l6 = 0.1522; // [m]
-    double l7 = 0.146;  // [m]
-    double l8 = 0.121;  // [m]
+    double l1 = 0.1525; // [m]
+    double l2 = 0.1985; // [m]
+    double l3 = 0.620; // [m]
+    double l4 = 0.164; // [m]
+    double l5 = 0.559; // [m]
+    double l6 = 0.146; // [m]
+    double l7 = 0.146; // [m]
+    double l8 = 0.121; // [m]
 };
 
 
@@ -396,11 +397,7 @@ int main() {
 
 
 
-    Transform tf_ee = Transform(
-        quat(AngleAxis(DEG_TO_RAD(0), vec3::UnitY())),
-        vec3(0, 0.1, 0.0));
 
-    m1013.set_end_effector_tf(tf_ee);
 
 
     ImGui::start("데모");
@@ -432,9 +429,9 @@ int main() {
             ImGui::Dummy(ImVec2(0, 20));
 
             ImGui::Text("Target Transform 설정");
-            ImGui::DragFloat("##Target x", &target_x, 0.01f, -1.0f, 1.0f, "x: %.3f");
-            ImGui::DragFloat("##Target y", &target_y, 0.01f, -1.0f, 1.0f, "y: %.3f");
-            ImGui::DragFloat("##Target z", &target_z, 0.001f, -1.0f, 2.0f, "z: %.3f");
+            ImGui::DragFloat("##Target x", &target_x, 0.01f, -2.0f, 2.0f, "x: %.3f");
+            ImGui::DragFloat("##Target y", &target_y, 0.01f, -2.0f, 2.0f, "y: %.3f");
+            ImGui::DragFloat("##Target z", &target_z, 0.001f, -2.0f, 2.0f, "z: %.3f");
             ImGui::Dummy(ImVec2(0, 10));
             ImGui::DragFloat("##Target Roll", &target_roll, 1.0f, -180.0f, 180.0f, "Roll: %.3f");
             ImGui::DragFloat("##Target Pitch", &target_pitch, 1.0f, -130.0f, 130.0f, "Pitch: %.3f");
