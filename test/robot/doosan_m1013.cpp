@@ -187,16 +187,11 @@ private:
 
     // Inverse Kinematics
     std::array<double, 6> ik(const Transform& target_tf)
-{
-    // 초기 각도 설정
-    auto q = q_rad;
-
-    const int max_ik_iter = 200; // ✨ 최대 IK 반복 횟수
-    const double convergence_threshold = 1e-4; // ✨ 수렴 임계값 (예: 위치/회전 오차 크기)
-    const double step_rate = 0.01; // 최종 각도 업데이트 시 적용할 학습률/스텝 크기
-
-    for (int ik_iter = 0; ik_iter < max_ik_iter; ++ik_iter)
     {
+        // 초기 각도 설정
+        auto q = q_rad;
+
+
         // ----------------------------------------------------
         // 1. 오차 계산 (위치 + 회전)
         // ----------------------------------------------------
@@ -223,90 +218,28 @@ private:
         dx <<   pos_error.x(), pos_error.y(), pos_error.z(),
                 ori_error.x(), ori_error.y(), ori_error.z();
 
-        // ✨ 수렴 조건 확인
-        // 오차 벡터의 크기(노름)가 임계값보다 작으면 반복 중단
-        if (dx.norm() < convergence_threshold) {
-            break;
-        }
 
         // ----------------------------------------------------
         // 2. 자코비안 계산
         // ----------------------------------------------------
         J = jacobian( q[0], q[1], q[2], q[3], q[4], q[5] );
+        mat<6, 6> J_inv = pInv_DLS(J, lambda);
+        vec<6> dq = J_inv * dx;
 
-        // ----------------------------------------------------
-        // 3. QP Formulation (Hessian, Gradient)
-        //    min || J*dq - dx ||^2 + lambda || dq ||^2
-        //    H = J^T*J + lambda*I,  g = -J^T*dx
-        // ----------------------------------------------------
-        mat<6, 6> J_t = J.transpose();
-        mat<6, 6> H = J_t * J;
-        vec<6> g = -J_t * dx;
 
-        // Damping 추가 (Hessian 대각 성분에 lambda^2 더하기)
-        // Damping (lambda) 값은 외부 변수로 가정합니다.
-        for (int i = 0; i < 6; ++i)
-            H(i,i) += lambda * lambda;
-
-        // ----------------------------------------------------
-        // 4. 제약조건 (Bounds) 설정
-        // ----------------------------------------------------
-        vec<6> lb, ub;
-        double max_step = DEG_TO_RAD(10.0); // 최대 각속도/변위 제한
-
-        for(int i=0; i<6; ++i) {
-            double current_rad = q[i];
-            double min_rad = limits[i].min;
-            double max_rad = limits[i].max;
-
-            // 관절 한계에 의한 상하한
-            lb(i) = (min_rad - current_rad);
-            ub(i) = (max_rad - current_rad);
-
-            // 최대 스텝 크기에 의한 상하한
-            lb(i) = std::max(lb(i), -max_step);
-            ub(i) = std::min(ub(i), max_step);
-        }
-
-        // ----------------------------------------------------
-        // 5. QP Solver 실행 (Gauss-Seidel 반복)
-        // ----------------------------------------------------
-        vec<6> dq = vec<6>::Zero();
-        const int max_gs_iter = 20; // Gauss-Seidel 내부 반복 횟수
-
-        for (int gs_iter = 0; gs_iter < max_gs_iter; ++gs_iter) {
-            for (int i = 0; i < 6; ++i) {
-                // Sigma (H_ij * x_j) 계산 (j != i)
-                double sigma = 0.0;
-                for (int j = 0; j < 6; ++j) {
-                    if (i != j) {
-                        sigma += H(i, j) * dq(j);
-                    }
-                }
-
-                // x_i 업데이트 공식: ( -g_i - sigma ) / H_ii
-                double val = (-g(i) - sigma) / H(i, i);
-
-                // 제약 조건 범위 내로 투영(Project/Clamp)
-                if (val < lb(i)) val = lb(i);
-                if (val > ub(i)) val = ub(i);
-
-                dq(i) = val;
-            }
-        }
 
         // ----------------------------------------------------
         // 6. 최종 각도 업데이트
         // ----------------------------------------------------
         for (int i = 0; i < 6; ++i) {
             // dq를 적용하고, 각도 정규화 (예: -180도 ~ +180도)
-            q[i] = NORM_RAD_180(q[i] + dq(i) * step_rate);
+            q[i] = NORM_RAD_180(q[i] + dq(i) * 0.1);
         }
+
+
+
+        return q;
     }
-
-
-    return q;
-}
 
 
     // 자코비안 행렬
