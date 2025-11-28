@@ -22,7 +22,7 @@ public:
     }
 
 
-    void setTransform(const transform& tf)
+    void setTransform(const Transform& tf)
     {
         // Eigen::Matrix4d (double, Column-Major)의 데이터 포인터
         const double* m = tf.matrix().data();
@@ -53,7 +53,7 @@ public:
 
 
 
-    AxisObject& operator=(const transform& tf)
+    AxisObject& operator=(const Transform& tf)
     {
         this->setTransform(tf);
         return *this;

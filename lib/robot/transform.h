@@ -35,82 +35,82 @@ using AngleAxis = Eigen::AngleAxisd;
 
 
 
-class transform {
+class Transform {
 public:
     using Isometry = Eigen::Isometry3d;
-
-
-
 private:
     Isometry T_;
 
 public:
-    transform() : T_(Isometry::Identity()) {}
-    explicit transform(const Isometry& iso) : T_(iso) {}
-    explicit transform(const mat4& H) : T_(H) {}
+    Transform() : T_(Isometry::Identity()) {}
+    explicit Transform(const Isometry& iso) : T_(iso) {}
+    explicit Transform(const mat4& H) : T_(H) {}
 
-    // 이동 -> 회전 순서
-    transform(const quat& q, const vec3& t) : T_(Isometry::Identity()) {
+    // 이동 → 회전으로 보고 FK를 설계하면 쉽다
+    Transform(const quat& q, const vec3& t) : T_(Isometry::Identity()) {
         T_.rotate(q);
-        T_.pretranslate(t);;
+        T_.pretranslate(t);
+    }
+
+    Transform(const AngleAxis& r, const vec3& t) : T_(Isometry::Identity()) {
+        T_.rotate(r);
+        T_.pretranslate(t);
     }
 
 
     // --- 접근자 (Getters) --- //
-    const mat4& matrix()  const         { return T_.matrix();                           }
-    vec3 P()              const         { return T_.translation();                      }
-    mat3 R()              const         { return T_.rotation();                         }
-    quat quaternion()     const         { return quat(T_.rotation());                   }
+    const mat4& matrix()  const           { return T_.matrix();                           }
+    vec3 trans()          const           { return T_.translation();                      }
+    mat3 rot()            const           { return T_.rotation();                         }
+    quat quaternion()     const           { return quat(T_.rotation());                   }
 
-    double const  z()     const         { return T_.translation().z();                  }
-    double const  x()     const         { return T_.translation().x();                  }
-    double const  y()     const         { return T_.translation().y();                  }
+    double const  z()     const           { return T_.translation().z();                  }
+    double const  x()     const           { return T_.translation().x();                  }
+    double const  y()     const           { return T_.translation().y();                  }
 
 
     // ZYX 오일러 각도 (Yaw-Pitch-Roll)
-    double const  roll()  const         { return T_.rotation().eulerAngles(2, 1, 0)[2]; }
-    double const  pitch() const         { return T_.rotation().eulerAngles(2, 1, 0)[1]; }
-    double const  yaw()   const         { return T_.rotation().eulerAngles(2, 1, 0)[0]; }
+    double const  roll()  const           { return T_.rotation().eulerAngles(2, 1, 0)[2]; }
+    double const  pitch() const           { return T_.rotation().eulerAngles(2, 1, 0)[1]; }
+    double const  yaw()   const           { return T_.rotation().eulerAngles(2, 1, 0)[0]; }
 
-    transform inverse()   const         { return transform(T_.inverse());               }
+    Transform inverse()   const           { return Transform(T_.inverse());               }
 
 
 
     // --- 수정자 (Setters) --- //
-    void setIdentity()                  { T_.setIdentity();                             }
-    void setTranslation(const vec3& t)  { T_.translation() = t;                         }
-    void setRotation(const quat& q)     { T_.linear() = q.toRotationMatrix();           }
-    void setRotation(const mat3& R)     { T_.linear() = R;                              }
-
+    void set_identity()                   { T_.setIdentity();                             }
+    void set_trans(const vec3& t)         { T_.translation() = t;                         }
+    void set_rotation(const quat& q)      { T_.linear() = q.toRotationMatrix();           }
+    void set_rotation(const mat3& R)      { T_.linear() = R;                              }
+    void set_rotation(const AngleAxis& r) { T_.linear() = r.toRotationMatrix();           }
+    void set_rotation(double rad, const vec3& axis) { T_.linear() = AngleAxis(rad, axis).toRotationMatrix(); }
 
 
     // --- 연산자 오버로딩 --- //
-    transform& operator=(const mat4& m) {
+    Transform& operator=(const mat4& m) {
         this->T_ = m;
         return *this;
     }
 
-    transform operator*(const transform& other) const {
-        return transform(this->T_ * other.T_);
+    Transform operator*(const Transform& other) const {
+        return Transform(this->T_ * other.T_);
     }
 
     vec3 operator*(const vec3& point) const {
         return this->T_ * point;
     }
 
-    transform operator-(const transform& other) const {
+    Transform operator-(const Transform& other) const {
         mat4 result = this->matrix() - other.matrix();
-        return transform(result);
+        return Transform(result);
     }
 
     double operator()(int row, int col) const {
-        assert(row >= 0 && row < 4 && col >= 0 && col < 4);
         return T_.matrix()(row, col);
     }
 
     double& operator()(int row, int col) {
-        assert(row < 3 && "Cannot modify the last row of an Isometry (it's fixed at [0 0 0 1])");
-
         if (col < 3) {
             return T_.linear()(row, col);
         } else if (col == 3) {
@@ -121,200 +121,10 @@ public:
 
     // --- 유틸리티 --- //
 
-    friend std::ostream &operator<<(std::ostream &os, const transform &rt)
+    friend std::ostream& operator<<(std::ostream& os, const Transform& rt)
     {
         const Eigen::IOFormat fmt(6, 0, ", ", "\n", "[", "]");
         os << rt.matrix().format(fmt);
         return os;
     }
 };
-
-
-
-
-// ============================================================================
-// Jacobian 인버스
-// ============================================================================
-
-
-
-/*
-inline transform::mat<6,12> jInv(const transform::mat<12, 6>& J) {
-    transform::mat<3, 6> J_pos = J.block<3, 6>(0, 0);
-    transform::mat<3, 3> JJ_T_pos = J_pos * J_pos.transpose();
-    Eigen::SelfAdjointEigenSolver<transform::mat<3, 3>> eigensolver(JJ_T_pos);
-    double min_eigenvalue = eigensolver.eigenvalues()(0);
-
-    double w_min = std::sqrt(std::max(0.0, min_eigenvalue));
-
-    double lambda_max = 0.9;
-    double w_min_threshold = 0.14;
-    double lambda = 0.01;
-
-    if (w_min < w_min_threshold) {
-        lambda = lambda_max * (1.0 - (w_min / w_min_threshold));
-    }
-
-    transform::mat<12, 12> I = transform::mat<12, 12>::Identity();
-    return J.transpose() * (J * J.transpose() + lambda * lambda * I).inverse();
-}
-*/
-
-
-
-
-
-
-
-
-//
-// // ============================================================================
-// // 관절 한계 구조체
-// // ============================================================================
-// struct JointLimits {
-//     std::vector<double> q_min;  // 최소 관절 각도 [rad]
-//     std::vector<double> q_max;  // 최대 관절 각도 [rad]
-//
-//     JointLimits(int num_joints) {
-//         q_min.resize(num_joints, -M_PI);
-//         q_max.resize(num_joints, M_PI);
-//     }
-//
-//     // 특정 관절의 한계 설정
-//     void setLimit(int joint_idx, double min_rad, double max_rad) {
-//         assert(joint_idx >= 0 && joint_idx < q_min.size());
-//         q_min[joint_idx] = min_rad;
-//         q_max[joint_idx] = max_rad;
-//     }
-// };
-//
-//
-//
-// // ============================================================================
-// // 방법 1: Simple Clamping (가장 단순하고 실용적)
-// // ============================================================================
-// inline void clampJointAngles(transform::vec<6>& q, const JointLimits& limits) {
-//     for (int i = 0; i < 6; ++i) {
-//         q(i) = std::max(limits.q_min[i], std::min(q(i), limits.q_max[i]));
-//     }
-// }
-//
-//
-// // ============================================================================
-// // 방법 2: Soft Clamping with Damping (한계 근처에서 스텝 크기 감소)
-// // ============================================================================
-// inline double computeJointLimitScale(const transform::vec<6>& q,
-//                                      const JointLimits& limits,
-//                                      double activation_ratio = 0.2) {
-//     double scale = 1.0;
-//
-//     for (int i = 0; i < 6; ++i) {
-//         double range = limits.q_max[i] - limits.q_min[i];
-//         double margin_min = q(i) - limits.q_min[i];
-//         double margin_max = limits.q_max[i] - q(i);
-//         double min_margin = std::min(margin_min, margin_max);
-//
-//         double activation_threshold = activation_ratio * range;
-//
-//         if (min_margin < activation_threshold) {
-//             double joint_scale = min_margin / activation_threshold;
-//             scale = std::min(scale, joint_scale);
-//         }
-//     }
-//
-//     return scale;
-// }
-//
-//
-// // ============================================================================
-// // 방법 3: Repulsive Potential (한계 근처에서 반발력 생성)
-// // ============================================================================
-// inline transform::vec<6> computeRepulsiveForce(const transform::vec<6>& q,
-//                                                const JointLimits& limits,
-//                                                double threshold_ratio = 0.15,
-//                                                double gain = 0.05) {
-//     transform::vec<6> repulsive = transform::vec<6>::Zero();
-//
-//     for (int i = 0; i < 6; ++i) {
-//         double range = limits.q_max[i] - limits.q_min[i];
-//         double threshold = threshold_ratio * range;
-//
-//         double dist_min = q(i) - limits.q_min[i];
-//         double dist_max = limits.q_max[i] - q(i);
-//
-//         // 최소 한계에 가까울 때 양의 반발력 (위로 밀어냄)
-//         if (dist_min < threshold && dist_min > 0) {
-//             repulsive(i) += gain * (1.0 / dist_min - 1.0 / threshold);
-//         }
-//
-//         // 최대 한계에 가까울 때 음의 반발력 (아래로 밀어냄)
-//         if (dist_max < threshold && dist_max > 0) {
-//             repulsive(i) -= gain * (1.0 / dist_max - 1.0 / threshold);
-//         }
-//     }
-//
-//     return repulsive;
-// }
-//
-//
-// // ============================================================================
-// // 통합 IK 업데이트 함수 (여러 방법 조합 가능)
-// // ============================================================================
-// enum class JointLimitMethod {
-//     NONE,                // 제약 없음
-//     SIMPLE_CLAMP,        // 단순 클램핑
-//     SOFT_CLAMP,          // 부드러운 클램핑 (스텝 크기 감소)
-//     REPULSIVE,           // 반발력
-//     SOFT_CLAMP_REPULSIVE // 부드러운 클램핑 + 반발력 조합
-// };
-//
-// inline void applyJointLimitConstraint(
-//     transform::vec<6>& dq,
-//     transform::vec<6>& q,
-//     const JointLimits& limits,
-//     JointLimitMethod method = JointLimitMethod::SOFT_CLAMP_REPULSIVE,
-//     double activation_ratio = 0.02,
-//     double repulsive_gain = 0.01)
-// {
-//     switch (method) {
-//         case JointLimitMethod::NONE:
-//             // 제약 없음, dq 그대로 적용
-//             break;
-//
-//         case JointLimitMethod::SIMPLE_CLAMP:
-//             // dq 적용 후 클램핑
-//             q += dq;
-//             clampJointAngles(q, limits);
-//             dq.setZero();  // 이미 적용했으므로 dq 초기화
-//             break;
-//
-//         case JointLimitMethod::SOFT_CLAMP:
-//             {
-//                 // 한계 근처에서 스텝 크기 감소
-//                 double scale = computeJointLimitScale(q, limits, activation_ratio);
-//                 dq *= scale;
-//             }
-//             break;
-//
-//         case JointLimitMethod::REPULSIVE:
-//             {
-//                 // 반발력 추가
-//                 transform::vec<6> repulsive = computeRepulsiveForce(
-//                     q, limits, activation_ratio, repulsive_gain);
-//                 dq += repulsive;
-//             }
-//             break;
-//
-//         case JointLimitMethod::SOFT_CLAMP_REPULSIVE:
-//             {
-//                 // 부드러운 클램핑 + 반발력 조합 (권장)
-//                 double scale = computeJointLimitScale(q, limits, activation_ratio);
-//                 dq *= scale;
-//
-//                 transform::vec<6> repulsive = computeRepulsiveForce(
-//                     q, limits, activation_ratio, repulsive_gain);
-//                 dq += repulsive;
-//             }
-//             break;
-//     }
-// }

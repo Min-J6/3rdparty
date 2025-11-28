@@ -39,7 +39,7 @@ public:
     }
 
 
-    void setTransform(const transform& tf)
+    void setTransform(const Transform& tf)
     {
         // Eigen::Matrix4d (double, Column-Major)의 데이터 포인터
         const double* m = tf.matrix().data();
@@ -70,7 +70,7 @@ public:
 
 
 
-    AxisObject& operator=(const transform& tf)
+    AxisObject& operator=(const Transform& tf)
     {
         this->setTransform(tf);
         return *this;
@@ -147,9 +147,9 @@ void DrawLinkLine(const AxisObject& from, const AxisObject& to)
 
 
 
-transform::mat<12, 6> Jcobian(float q0, float q1, float q2, float q3, float q4, float q5)
+Transform::mat<12, 6> Jcobian(float q0, float q1, float q2, float q3, float q4, float q5)
 {
-    static transform::mat<12, 6> J = transform::mat<12, 6>::Zero();
+    static Transform::mat<12, 6> J = Transform::mat<12, 6>::Zero();
 
     double c0 = std::cos(q0);
     double s0 = std::sin(q0);
@@ -245,8 +245,8 @@ transform::mat<12, 6> Jcobian(float q0, float q1, float q2, float q3, float q4, 
 
 
 
-void draw_manipulabilityEllipsoid(const transform::mat<3, 6>& J_position,
-                                 const transform::vec3& center,
+void draw_manipulabilityEllipsoid(const Transform::mat<3, 6>& J_position,
+                                 const Transform::vec3& center,
                                  float scale = 1.0f,
                                  const ImVec4& color = ImVec4(0.0f, 1.0f, 1.0f, 0.5f))
 {
@@ -352,14 +352,14 @@ int main() {
 
 
 
-    transform base_tf;
-    transform joint1_tf;
-    transform joint2_tf;
-    transform joint3_tf;
-    transform joint4_tf;
-    transform joint5_tf;
-    transform joint6_tf;
-    transform endEffector_tf;
+    Transform base_tf;
+    Transform joint1_tf;
+    Transform joint2_tf;
+    Transform joint3_tf;
+    Transform joint4_tf;
+    Transform joint5_tf;
+    Transform joint6_tf;
+    Transform endEffector_tf;
 
 
     float q0 = 0.0;
@@ -374,10 +374,10 @@ int main() {
 
 
 
-    transform::vec3 tPos(0.2, 0.0, 0.379); // [m]
-    transform::quat qRot(transform::AngleAxis(DEG_TO_RAD(0), transform::vec3(0, 0, 1)));
+    Transform::vec3 tPos(0.2, 0.0, 0.379); // [m]
+    Transform::quat qRot(Transform::AngleAxis(DEG_TO_RAD(0), Transform::vec3(0, 0, 1)));
 
-    transform target_tf(qRot, tPos);
+    Transform target_tf(qRot, tPos);
 
 
 
@@ -422,56 +422,56 @@ int main() {
 
 
             // Target Transform
-            transform::quat target_qRot(transform::AngleAxis(DEG_TO_RAD(target_yaw), transform::vec3::UnitZ()) *
-                                        transform::AngleAxis(DEG_TO_RAD(target_pitch + 90), transform::vec3::UnitY()) *
-                                        transform::AngleAxis(DEG_TO_RAD(target_roll), transform::vec3::UnitZ()));
-            target_tf = transform(target_qRot, transform::vec3(target_x, target_y, target_z));
+            Transform::quat target_qRot(Transform::AngleAxis(DEG_TO_RAD(target_yaw), Transform::vec3::UnitZ()) *
+                                        Transform::AngleAxis(DEG_TO_RAD(target_pitch + 90), Transform::vec3::UnitY()) *
+                                        Transform::AngleAxis(DEG_TO_RAD(target_roll), Transform::vec3::UnitZ()));
+            target_tf = Transform(target_qRot, Transform::vec3(target_x, target_y, target_z));
 
 
             // Joint1: base 좌표계 기준
-            transform::vec3 pos1(0, 0, l1);
-            transform::quat rot1(transform::AngleAxis(DEG_TO_RAD(q0), transform::vec3::UnitZ()));
-            transform tf1(rot1, pos1);
+            Transform::vec3 pos1(0, 0, l1);
+            Transform::quat rot1(Transform::AngleAxis(DEG_TO_RAD(q0), Transform::vec3::UnitZ()));
+            Transform tf1(rot1, pos1);
 
             // Joint2: Joint1 좌표계 기준
-            transform::vec3 pos2(-l2, 0, 0);
-            transform::quat rot2(transform::AngleAxis(DEG_TO_RAD(q1), transform::vec3::UnitX()));
-            transform tf2(rot2, pos2);
+            Transform::vec3 pos2(-l2, 0, 0);
+            Transform::quat rot2(Transform::AngleAxis(DEG_TO_RAD(q1), Transform::vec3::UnitX()));
+            Transform tf2(rot2, pos2);
 
             // Joint3: Joint2 좌표계 기준
-            transform::vec3 pos3(0, 0, l3);
-            transform::quat rot3(transform::AngleAxis(DEG_TO_RAD(q2), transform::vec3::UnitX()));
-            transform tf3(rot3, pos3);
+            Transform::vec3 pos3(0, 0, l3);
+            Transform::quat rot3(Transform::AngleAxis(DEG_TO_RAD(q2), Transform::vec3::UnitX()));
+            Transform tf3(rot3, pos3);
 
             // Joint4: Joint3 좌표계 기준
-            transform::vec3 pos4(l4, 0, 0);
-            transform::quat rot4(transform::AngleAxis(DEG_TO_RAD(q3), transform::vec3::UnitZ()));
-            transform tf4(rot4, pos4);
+            Transform::vec3 pos4(l4, 0, 0);
+            Transform::quat rot4(Transform::AngleAxis(DEG_TO_RAD(q3), Transform::vec3::UnitZ()));
+            Transform tf4(rot4, pos4);
 
             // Joint5: Joint4 좌표계 기준
-            transform::vec3 pos5(-l6, 0, l5);
-            transform::quat rot5(transform::AngleAxis(DEG_TO_RAD(q4), transform::vec3::UnitX()));
-            transform tf5(rot5, pos5);
+            Transform::vec3 pos5(-l6, 0, l5);
+            Transform::quat rot5(Transform::AngleAxis(DEG_TO_RAD(q4), Transform::vec3::UnitX()));
+            Transform tf5(rot5, pos5);
 
             // Joint6: Joint5 좌표계 기준
-            transform::vec3 pos6(l7, 0, 0);
-            transform::quat rot6(transform::AngleAxis(DEG_TO_RAD(q5), transform::vec3::UnitZ()));
-            transform tf6(rot6, pos6);
+            Transform::vec3 pos6(l7, 0, 0);
+            Transform::quat rot6(Transform::AngleAxis(DEG_TO_RAD(q5), Transform::vec3::UnitZ()));
+            Transform tf6(rot6, pos6);
 
             // EndEffector: Joint6 좌표계 기준
-            transform::vec3 pos_ee(0, 0, l8);
-            transform::quat rot_ee(transform::AngleAxis(DEG_TO_RAD(0), transform::vec3::UnitZ()));
-            transform tf_ee(rot_ee, pos_ee);
+            Transform::vec3 pos_ee(0, 0, l8);
+            Transform::quat rot_ee(Transform::AngleAxis(DEG_TO_RAD(0), Transform::vec3::UnitZ()));
+            Transform tf_ee(rot_ee, pos_ee);
 
 
 
-            transform final_tf1   = tf1;
-            transform final_tf2   = final_tf1 * tf2;
-            transform final_tf3   = final_tf2 * tf3;
-            transform final_tf4   = final_tf3 * tf4;
-            transform final_tf5   = final_tf4 * tf5;
-            transform final_tf6   = final_tf5 * tf6;
-            transform final_tf_ee = final_tf6 * tf_ee;
+            Transform final_tf1   = tf1;
+            Transform final_tf2   = final_tf1 * tf2;
+            Transform final_tf3   = final_tf2 * tf3;
+            Transform final_tf4   = final_tf3 * tf4;
+            Transform final_tf5   = final_tf4 * tf5;
+            Transform final_tf6   = final_tf5 * tf6;
+            Transform final_tf_ee = final_tf6 * tf_ee;
 
             // AxisObject에 최종 변환 적용
             joint1.setTransform(final_tf1);
@@ -485,11 +485,11 @@ int main() {
 
 
             // IK
-            transform fk = final_tf_ee;
+            Transform fk = final_tf_ee;
 
-            transform error = target_tf - fk;
+            Transform error = target_tf - fk;
 
-            transform::vec<12> dx;
+            Transform::vec<12> dx;
             dx <<   error(0, 3),
                     error(1, 3),
                     error(2, 3),
@@ -504,16 +504,16 @@ int main() {
                     error(2, 2);
 
 
-            transform::mat<12,6> j = Jcobian(DEG_TO_RAD(q0),
+            Transform::mat<12,6> j = Jcobian(DEG_TO_RAD(q0),
                                              DEG_TO_RAD(q1),
                                              DEG_TO_RAD(q2),
                                              DEG_TO_RAD(q3),
                                              DEG_TO_RAD(q4),
                                              DEG_TO_RAD(q5));
 
-            transform::mat<6, 12> j_inv = jInv(j);
+            Transform::mat<6, 12> j_inv = jInv(j);
 
-            transform::vec<6> dq;
+            Transform::vec<6> dq;
             dq = j_inv * dx * 0.1;
 
 
@@ -529,9 +529,9 @@ int main() {
 
 
             float x, y, z;
-            x = fk.P().x();
-            y = fk.P().y();
-            z = fk.P().z();
+            x = fk.trans().x();
+            y = fk.trans().y();
+            z = fk.trans().z();
             ImGui::Text("x: %.3f, y: %.3f, z: %.3f", x, y, z);
 
             float roll = fk.roll();
@@ -563,8 +563,8 @@ int main() {
 
 
                 // Manipulability ellipsoid 그리기
-                transform::mat<3, 6> j_position_final = j.block<3, 6>(0, 0);
-                draw_manipulabilityEllipsoid(j_position_final, fk.P(), 0.5f, ImVec4(0.0f, 1.0f, 1.0f, 0.1f));
+                Transform::mat<3, 6> j_position_final = j.block<3, 6>(0, 0);
+                draw_manipulabilityEllipsoid(j_position_final, fk.trans(), 0.5f, ImVec4(0.0f, 1.0f, 1.0f, 0.1f));
 
 
                 ImPlot3D::EndPlot();

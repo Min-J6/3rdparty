@@ -38,7 +38,7 @@ public:
     }
 
 
-    void setTransform(const transform& tf)
+    void setTransform(const Transform& tf)
     {
         // Eigen::Matrix4d (double, Column-Major)의 데이터 포인터
         const double* m = tf.matrix().data();
@@ -69,7 +69,7 @@ public:
 
 
 
-    AxisObject& operator=(const transform& tf)
+    AxisObject& operator=(const Transform& tf)
     {
         this->setTransform(tf);
         return *this;
@@ -169,8 +169,8 @@ AxisObject end_effector(0.06);
 
 
 // 끝단의 매니풀러빌리티와 로봇 링크 관절을 그리는 함수
-void draw_simulation(const mat<6, 6>& j, const transform& fk);
-void draw_simulation(const transform& fk);
+void draw_simulation(const mat<6, 6>& j, const Transform& fk);
+void draw_simulation(const Transform& fk);
 
 
 mat<6, 6> pInv_DLS(const mat<6, 6>& J) {
@@ -199,8 +199,8 @@ public:
     // ----------------------------------
 
     std::array<double, 6> q_rad;        // 각 Joint 각도 [rad]
-    std::array<transform, 8> tf;        // 각 조인트의 transform
-    std::optional<transform> tf_ee;     // 엔드 이펙터 transform
+    std::array<Transform, 8> tf;        // 각 조인트의 transform
+    std::optional<Transform> tf_ee;     // 엔드 이펙터 transform
 
     std::array<JointLimits, 6> limits;  // 각도 제한 조건
 
@@ -224,13 +224,13 @@ public:
         fk();
     }
 
-    transform get_fk(int i)
+    Transform get_fk(int i)
     {
         return tf[i];
     }
 
 
-    void set_end_effector_tf(const transform& tf)
+    void set_end_effector_tf(const Transform& tf)
     {
         tf_ee = tf;
     }
@@ -259,7 +259,7 @@ public:
 
         vec3 t_pos(x, y, z);
 
-        transform target_tf(t_rot, t_pos);
+        Transform target_tf(t_rot, t_pos);
 
         auto q = ik(target_tf);
         movej(q[0], q[1], q[2], q[3], q[4], q[5]);
@@ -272,24 +272,24 @@ private:
     // ----------------------------------
 
     // Forward Kinematics
-    transform fk()
+    Transform fk()
     {
         return fk(q_rad[0], q_rad[1], q_rad[2], q_rad[3], q_rad[4], q_rad[5]);
     }
 
 
 
-    transform fk(double q0, double q1, double q2, double q3, double q4, double q5)
+    Transform fk(double q0, double q1, double q2, double q3, double q4, double q5)
     {
         // 각 조인트의 transform 계산
-        transform tf0 = transform(quat(AngleAxis(0, vec3::UnitZ())), vec3(0, 0, 0));             // Base
-        transform tf1 = transform(quat(AngleAxis(q0, vec3::UnitZ())), vec3(0, 0, l1));           // Joint 1
-        transform tf2 = transform(quat(AngleAxis(q1, vec3::UnitX())), vec3(-l2, 0, 0));          // Joint 2
-        transform tf3 = transform(quat(AngleAxis(q2, vec3::UnitX())), vec3(0, 0, l3));           // Joint 3
-        transform tf4 = transform(quat(AngleAxis(q3, vec3::UnitZ())), vec3(l4, 0, 0));           // Joint 4
-        transform tf5 = transform(quat(AngleAxis(q4, vec3::UnitX())), vec3(-l6, 0, l5));         // Joint 5
-        transform tf6 = transform(quat(AngleAxis(q5, vec3::UnitZ())), vec3(l7, 0, 0));           // Joint 6
-        transform tf7 = transform(quat(AngleAxis(0, vec3::UnitZ())), vec3(0, 0, l8));            // Tool tip
+        Transform tf0 = Transform(quat(AngleAxis(0, vec3::UnitZ())), vec3(0, 0, 0));             // Base
+        Transform tf1 = Transform(quat(AngleAxis(q0, vec3::UnitZ())), vec3(0, 0, l1));           // Joint 1
+        Transform tf2 = Transform(quat(AngleAxis(q1, vec3::UnitX())), vec3(-l2, 0, 0));          // Joint 2
+        Transform tf3 = Transform(quat(AngleAxis(q2, vec3::UnitX())), vec3(0, 0, l3));           // Joint 3
+        Transform tf4 = Transform(quat(AngleAxis(q3, vec3::UnitZ())), vec3(l4, 0, 0));           // Joint 4
+        Transform tf5 = Transform(quat(AngleAxis(q4, vec3::UnitX())), vec3(-l6, 0, l5));         // Joint 5
+        Transform tf6 = Transform(quat(AngleAxis(q5, vec3::UnitZ())), vec3(l7, 0, 0));           // Joint 6
+        Transform tf7 = Transform(quat(AngleAxis(0, vec3::UnitZ())), vec3(0, 0, l8));            // Tool tip
 
 
 
@@ -313,18 +313,18 @@ private:
 
 
     // Inverse Kinematics
-        std::array<double, 6> ik(const transform& target_tf)
+        std::array<double, 6> ik(const Transform& target_tf)
     {
         auto q = q_rad;
 
 
         // 위치 오차
-        vec3 pos_error = target_tf.P() - fk(q[0], q[1], q[2], q[3], q[4], q[5]).P();
+        vec3 pos_error = target_tf.trans() - fk(q[0], q[1], q[2], q[3], q[4], q[5]).trans();
 
 
         // 회전 오차
-        mat3 R_cur = fk(q[0], q[1], q[2], q[3], q[4], q[5]).R();
-        mat3 R_tar = target_tf.R();
+        mat3 R_cur = fk(q[0], q[1], q[2], q[3], q[4], q[5]).rot();
+        mat3 R_tar = target_tf.rot();
 
         // 상대 회전 행렬 계산 (R_diff = R_target * R_current^T)
         // 이 순서로 곱해야 "Global Frame(Base)" 기준의 오차가 계산됨
@@ -618,7 +618,7 @@ M1013 m1013;
 // ------------------------------------------------
 
 
-void draw_simulation(const mat<6, 6>& j, const transform& fk)
+void draw_simulation(const mat<6, 6>& j, const Transform& fk)
 {
     ImGui::Begin("시각화");
     if (ImPlot3D::BeginPlot("로봇 FK/IK", ImVec2(-1,-1), ImPlot3DFlags_Equal | ImPlot3DFlags_NoLegend))
@@ -646,7 +646,7 @@ void draw_simulation(const mat<6, 6>& j, const transform& fk)
         DrawLinkLine(joint6, t_tip);
 
         mat<3, 6> j_pos = j.block<3, 6>(0, 0);
-        imgui_draw_manipulability(j_pos, fk.P(), 0.3f, ImVec4(0,1,1,0.1f));
+        imgui_draw_manipulability(j_pos, fk.trans(), 0.3f, ImVec4(0,1,1,0.1f));
 
         ImPlot3D::EndPlot();
     }
@@ -654,7 +654,7 @@ void draw_simulation(const mat<6, 6>& j, const transform& fk)
 }
 
 
-void draw_simulation(const transform& fk)
+void draw_simulation(const Transform& fk)
 {
     ImGui::Begin("시각화");
     if (ImPlot3D::BeginPlot("로봇 FK/IK", ImVec2(-1,-1), ImPlot3DFlags_Equal | ImPlot3DFlags_NoLegend))
