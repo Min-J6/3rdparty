@@ -23,11 +23,11 @@ int main() {
     // 퍼블리셔 생성
     //  - 토픽 이름
     //  - 메시지 타입: idl 파일에서 정의한 타입
-    //  - 도메인 아이디: ros2와 맞추고 싶으면 도메인 아이디를 같게 설정
+    //  - 도메인 아이디: ros2와 맞추고 싶으면 도메인 아이디를 같게 설정, 토픽 이름에 rt/를 추가
     // ----------------------------------------------
-    Publisher<PingData_Msg> publisher("PingTopic",  // 토픽 이름
-                &PingData_Msg_desc,                 // 메시지 타입
-                0                                   // 도메인 아이디
+    Publisher<PingData_Msg> publisher("rt/PingTopic",  // 토픽 이름
+                &PingData_Msg_desc,                    // 메시지 타입
+                0                                      // 도메인 아이디
     );
 
 
@@ -37,7 +37,7 @@ int main() {
     // ----------------------------------------------
     PingData_Msg msg;
 
-    for (int i = 0; i < 10; ++i)
+    for (int i = 0; i < 100; ++i)
     {
         msg.client_id = 123;
         msg.timestamp = getTimeStamp_ms(); // 데이터 설정
