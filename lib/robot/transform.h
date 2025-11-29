@@ -101,9 +101,30 @@ public:
         return this->T_ * point;
     }
 
-    Transform operator-(const Transform& other) const {
-        mat4 result = this->matrix() - other.matrix();
-        return Transform(result);
+    vec<6> operator-(const Transform& other) const {
+        vec<6> error_twist;
+
+        // 1. 위치 오차 (Position Error)
+        error_twist.head<3>() = this->trans() - other.trans();
+
+        // 2. 회전 오차 (Orientation Error - Log Map 근사)
+        const mat3 R_cur = other.rot(); // other: current_tf
+        const mat3 R_tar = this->rot(); // this: target_tf
+
+        // 상대 회전 행렬: R_diff = R_tar * R_cur^T
+        const mat3 R_diff = R_tar * R_cur.transpose();
+
+        // 로그 맵 근사 (회전 벡터 계산)
+        const vec3 ori_error {
+            0.5 * (R_diff(2, 1) - R_diff(1, 2)),
+            0.5 * (R_diff(0, 2) - R_diff(2, 0)),
+            0.5 * (R_diff(1, 0) - R_diff(0, 1))
+        };
+
+
+        error_twist.tail<3>() = ori_error;
+
+        return error_twist;
     }
 
     double operator()(int row, int col) const {

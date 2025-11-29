@@ -9,22 +9,19 @@
 
 #include <iostream>
 #include <cmath>
+#include <iomanip>
 #include <optional>
 #include <vector>
 #include <string>
 #include <stdexcept>
 #include <bits/this_thread_sleep.h>
 
+// Eigen 라이브러리를 사용하여 SelfAdjointEigenSolver를 사용하기 위한 최소한의 정의
+// (실제 코드 환경에서는 이미 포함되어 있을 것으로 가정합니다.)
+#include <Eigen/Dense>
 
-// 두산 M1013 링크 길이
-const double l1 = 0.135;
-const double l2 = 0.1702;
-const double l3 = 0.411;
-const double l4 = 0.164;
-const double l5 = 0.368;
-const double l6 = 0.1522;
-const double l7 = 0.146;
-const double l8 = 0.121;
+
+vec<6> s_val = vec<6>::Zero();
 
 
 // 시각화용 AxisObject
@@ -45,15 +42,57 @@ void draw_simulation(const mat<6, 6>& j, const Transform& fk);
 void draw_simulation(const Transform& fk);
 
 
-mat<6, 6> pInv_DLS(const mat<6, 6>& J) {
-    double lambda = 0.1; // 감쇠 계수
-    mat<6, 6> I = mat<6, 6>::Identity();
-    mat<6, 6> JJ_T = J * J.transpose();
-    mat<6, 6> temp = JJ_T + lambda * lambda * I;
-    return J.transpose() * temp.inverse();
+template<int Rows, int Cols>
+struct SVDResult {
+    mat<Rows, Rows> U;
+    mat<Cols, Cols> Vt;
+    vec<std::min(Rows, Cols)> S_values;
+};
+
+
+template<int Rows, int Cols>
+SVDResult<Rows, Cols> SVD_LAPACK(const mat<Rows, Cols>& A)
+{
+    // 결과 구조체 초기화 (U, Vt, S_values 공간 할당)
+    SVDResult<Rows, Cols> result;
+
+
+    int m = Rows;
+    int n = Cols;
+    mat<Rows, Cols> Acopy = A; // DGESVD는 A를 덮어쓰므로 복사본 사용
+
+    // LAPACK DGESVD를 위한 설정
+    char jobu = 'A'; // U 행렬 계산
+    char jobvt = 'A'; // Vt 행렬 계산
+    int lda = Rows;
+    int ldu = Rows;
+    int ldvt = Cols;
+    int info = 0;
+
+    // 1단계: Optimal LWORK (작업 공간 크기) 쿼리
+    double work_size_query = 0.0;
+    int lwork = -1;
+
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda,
+            result.S_values.data(), result.U.data(), &ldu, result.Vt.data(), &ldvt,
+            &work_size_query, &lwork, &info);
+
+    // 2단계: 실제 SVD 계산
+    lwork = static_cast<int>(work_size_query);
+    Acopy = A;
+    std::vector<double> work(lwork);
+
+    dgesvd_(&jobu, &jobvt, &m, &n, Acopy.data(), &lda,
+            result.S_values.data(), result.U.data(), &ldu, result.Vt.data(), &ldvt,
+            work.data(), &lwork, &info);
+
+    if (info != 0) {
+        throw std::runtime_error("LAPACK dgesvd_ failed. INFO code: " + std::to_string(info));
+    }
+
+    // 계산된 결과를 담은 구조체 반환
+    return result;
 }
-
-
 
 
 
@@ -70,13 +109,14 @@ public:
     // 제어 함수
     // ----------------------------------
 
-    std::array<double, 6> q_rad;        // 각 Joint 각도 [rad]
+    vec<6> q_rad;                       // 각 Joint 각도 [rad]
     std::array<Transform, 8> tf;        // 각 조인트의 transform
     std::optional<Transform> tf_ee;     // 엔드 이펙터 transform
 
     std::array<JointLimits, 6> limits;  // 각도 제한 조건
 
     mat<6, 6> J;                        // 자코비안 매트릭스
+    mat<6, 6> J_inv;
     double lambda;                      // Damping Factor (특이점 방지용)
 
 
@@ -89,7 +129,7 @@ public:
         limits[4] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         limits[5] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
 
-        lambda = 0.1;
+        lambda = 0.01;
 
         J = mat<6, 6>::Zero();
 
@@ -125,15 +165,16 @@ public:
     // MoveL
     void movel(double x, double y, double z, double roll, double pitch, double yaw)
     {
-        quat t_rot(AngleAxis(yaw, vec3::UnitZ()) *             // Z
-                   AngleAxis(pitch + M_PI_2, vec3::UnitY()) *  // Y
-                   AngleAxis(roll, vec3::UnitZ()));            // Z
+        const quat t_rot(
+            AngleAxis(yaw, vec3::UnitZ()) *              // Z
+            AngleAxis(pitch + M_PI_2, vec3::UnitY()) *   // Y
+            AngleAxis(roll, vec3::UnitZ()));             // Z
 
-        vec3 t_pos(x, y, z);
+        const vec3 t_pos(x, y, z);
 
-        Transform target_tf(t_rot, t_pos);
+        const Transform target_tf(t_rot, t_pos);
 
-        auto q = ik(target_tf);
+        const vec<6> q = ik(target_tf);
         movej(q[0], q[1], q[2], q[3], q[4], q[5]);
     }
 
@@ -154,25 +195,25 @@ private:
     Transform fk(double q0, double q1, double q2, double q3, double q4, double q5)
     {
         // 각 조인트의 transform 계산
-        tf[0] = Transform(AngleAxis(0,  vec3::UnitZ()), vec3(0, 0, 0));     // Base
-        tf[1] = Transform(AngleAxis(q0, vec3::UnitZ()), vec3(0, 0, l1));    // Joint 1
-        tf[2] = Transform(AngleAxis(q1, vec3::UnitX()), vec3(-l2, 0, 0));   // Joint 2
-        tf[3] = Transform(AngleAxis(q2, vec3::UnitX()), vec3(0, 0, l3));    // Joint 3
-        tf[4] = Transform(AngleAxis(q3, vec3::UnitZ()), vec3(l4, 0, 0));    // Joint 4
-        tf[5] = Transform(AngleAxis(q4, vec3::UnitX()), vec3(-l6, 0, l5));  // Joint 5
-        tf[6] = Transform(AngleAxis(q5, vec3::UnitZ()), vec3(l7, 0, 0));    // Joint 6
-        tf[7] = Transform(AngleAxis(0,  vec3::UnitZ()), vec3(0, 0, l8));    // Tool tip
+        const Transform tf0 = Transform(AngleAxis(0,  vec3::UnitZ()), vec3(0, 0, 0));     // Base
+        const Transform tf1 = Transform(AngleAxis(q0, vec3::UnitZ()), vec3(0, 0, l1));    // Joint 1
+        const Transform tf2 = Transform(AngleAxis(q1, vec3::UnitX()), vec3(-l2, 0, 0));   // Joint 2
+        const Transform tf3 = Transform(AngleAxis(q2, vec3::UnitX()), vec3(0, 0, l3));    // Joint 3
+        const Transform tf4 = Transform(AngleAxis(q3, vec3::UnitZ()), vec3(l4, 0, 0));    // Joint 4
+        const Transform tf5 = Transform(AngleAxis(q4, vec3::UnitX()), vec3(-l6, 0, l5));  // Joint 5
+        const Transform tf6 = Transform(AngleAxis(q5, vec3::UnitZ()), vec3(l7, 0, 0));    // Joint 6
+        const Transform tf7 = Transform(AngleAxis(0,  vec3::UnitZ()), vec3(0, 0, l8));    // Tool tip
 
 
         // Forward Kinematics
-        tf[0] = tf[0];
-        tf[1] = tf[0] * tf[1];
-        tf[2] = tf[1] * tf[2];
-        tf[3] = tf[2] * tf[3];
-        tf[4] = tf[3] * tf[4];
-        tf[5] = tf[4] * tf[5];
-        tf[6] = tf[5] * tf[6];
-        tf[7] = tf[6] * tf[7];
+        tf[0] = tf0;
+        tf[1] = tf[0] * tf1;
+        tf[2] = tf[1] * tf2;
+        tf[3] = tf[2] * tf3;
+        tf[4] = tf[3] * tf4;
+        tf[5] = tf[4] * tf5;
+        tf[6] = tf[5] * tf6;
+        tf[7] = tf[6] * tf7;
 
         if (tf_ee)
         {
@@ -186,124 +227,149 @@ private:
 
 
     // Inverse Kinematics
-    std::array<double, 6> ik(const Transform& target_tf)
+    vec<6> ik(const Transform& target_tf)
     {
-        // 초기 각도 설정
-        auto q = q_rad;
+const double gamma = 0.01;
+    double k_s = 1.0;
+
+    // ----------------------------------------------------
+    // IK 설정 상수
+    // ----------------------------------------------------
+    const int MAX_ITER = 200;
+    const double CONVERGENCE_TOLERANCE = 0.01;
+    // ALPHA는 비례 게인 K와 시간 간격 dt를 모두 포함하는 IK 스텝 크기 (Learning Rate) 역할
+    const double ALPHA = 0.0003;
 
 
-        // ----------------------------------------------------
-        // 1. 오차 계산 (위치 + 회전)
-        // ----------------------------------------------------
-
-        // 현재 FK 계산
-        Transform current_tf = fk(q[0], q[1], q[2], q[3], q[4], q[5]);
-
-        // 위치 오차
-        vec3 pos_error = target_tf.trans() - current_tf.trans();
-
-        // 회전 오차
-        mat3 R_cur = current_tf.rot();
-        mat3 R_tar = target_tf.rot();
-        mat3 R_diff = R_tar * R_cur.transpose(); // Global Frame 기준 오차
-
-        vec3 ori_error;
-        // 로그 맵(Logarithmic Map) 근사식: v = 0.5 * (R - R^T)
-        ori_error.x() = 0.5 * (R_diff(2, 1) - R_diff(1, 2)); // wx
-        ori_error.y() = 0.5 * (R_diff(0, 2) - R_diff(2, 0)); // wy
-        ori_error.z() = 0.5 * (R_diff(1, 0) - R_diff(0, 1)); // wz
-
-        // 오차 벡터 dx (6x1)
-        vec<6> dx;
-        dx <<   pos_error.x(), pos_error.y(), pos_error.z(),
-                ori_error.x(), ori_error.y(), ori_error.z();
+    // 초기 각도 설정 (현재 로봇 자세에서 시작)
+    auto q = q_rad;
 
 
-        // ----------------------------------------------------
-        // 2. 자코비안 계산
-        // ----------------------------------------------------
-        J = jacobian( q[0], q[1], q[2], q[3], q[4], q[5] );
-        mat<6, 6> J_inv = pInv_DLS(J, lambda);
-        vec<6> dq = J_inv * dx;
+    for (int iter = 0; iter < MAX_ITER; ++iter)
+    {
+        // --- 오차 계산 계산 --- //
+        const Transform current_tf = fk(q[0], q[1], q[2], q[3], q[4], q[5]);
 
+        const vec<6> error_twist = target_tf - current_tf;
+        const vec3 pos_error = error_twist.head<3>();      // 위치 오차
+        const vec3 ori_error = error_twist.tail<3>();      // 회전 오차
 
+        // 오차 벡터 dx (6x1: [pos_error; ori_error]) -> J-PARSE의 입력 t_des에 비례하는 오차
+        const vec<6> dx = {
+            pos_error.x(), pos_error.y(), pos_error.z(),
+            ori_error.x(), ori_error.y(), ori_error.z()
+        };
 
-        // ----------------------------------------------------
-        // 6. 최종 각도 업데이트
-        // ----------------------------------------------------
-        for (int i = 0; i < 6; ++i) {
-            // dq를 적용하고, 각도 정규화 (예: -180도 ~ +180도)
-            q[i] = NORM_RAD_180(q[i] + dq(i) * 0.1);
+        // 수렴 확인
+        if (dx.norm() < CONVERGENCE_TOLERANCE) {
+            break;
         }
 
 
+        // --- J-PARSE 로직 시작 --- //
 
-        return q;
+        jacobian( q[0], q[1], q[2], q[3], q[4], q[5] );
+        const auto svd = SVD_LAPACK(J);
+
+        // ... (중략: J-PARSE 행렬 구성 로직은 이전과 동일하므로 생략) ...
+        double sigma_max = svd.S_values.maxCoeff();
+        mat<6, 6> Sigma_s_pseudo_inverse = mat<6, 6>::Zero();
+        mat<6, 6> S_matrix = mat<6, 6>::Identity();
+
+        for (int i = 0; i < 6; ++i) {
+            double sigma_i = svd.S_values(i);
+            if (sigma_i < gamma * sigma_max) {
+                double sigma_s_i = gamma * sigma_max;
+                Sigma_s_pseudo_inverse(i, i) = 1.0 / sigma_s_i;
+                double s_ii = k_s * (sigma_i / sigma_s_i);
+                S_matrix(i, i) = s_ii;
+            } else {
+                Sigma_s_pseudo_inverse(i, i) = 1.0 / sigma_i;
+                S_matrix(i, i) = 1.0;
+            }
+        }
+        // J-PARSE 역행렬 (J_parse_plus) 계산
+        mat<6, 6> J_parse_plus = svd.Vt.transpose() * Sigma_s_pseudo_inverse * S_matrix * svd.U.transpose();
+
+        // --- J-PARSE 로직 종료 --- //
+
+
+        // 4. 조인트 속도 계산 및 스텝 크기 적용
+        // dq = J_parse_plus * dx * ALPHA
+        // J_parse_plus * dx는 원하는 조인트 속도(q_dot_des)를 나타냅니다.
+        // ALPHA는 학습률 또는 시간 간격 dt에 해당하는 스텝 크기(게인 K)를 포함합니다.
+        vec<6> dq = J_parse_plus * dx * ALPHA;
+
+
+        // 5. 조인트 각도 업데이트 (적분)
+        // q(t+dt) = q(t) + dq(t)
+        // IK 루프에서는 다음 반복(iteration)을 위한 각도 업데이트입니다.
+        q = q + dq;
+
+
+    }
+
+    return q;
     }
 
 
     // 자코비안 행렬
-    mat<6, 6> jacobian(double q0, double q1, double q2, double q3, double q4, double q5)
+    void jacobian(double q0, double q1, double q2, double q3, double q4, double q5)
     {
-        mat<6, 6> J_ = mat<6, 6>::Zero();
 
-        double c0 = std::cos(q0);
-        double c1 = std::cos(q1);
-        double c3 = std::cos(q3);
-        double c4 = std::cos(q4);
-        double s0 = std::sin(q0);
-        double s1 = std::sin(q1);
-        double s3 = std::sin(q3);
-        double s4 = std::sin(q4);
-        double c12 = std::cos(q1 + q2);
-        double s12 = std::sin(q1 + q2);
+        const double c0 = std::cos(q0);
+        const double c1 = std::cos(q1);
+        const double c3 = std::cos(q3);
+        const double c4 = std::cos(q4);
+        const double s0 = std::sin(q0);
+        const double s1 = std::sin(q1);
+        const double s3 = std::sin(q3);
+        const double s4 = std::sin(q4);
+        const double c12 = std::cos(q1 + q2);
+        const double s12 = std::sin(q1 + q2);
 
 
-        J_(0,0) = l2*s0 + l3*s1*c0 - l4*s0 + l5*s12*c0 + l6*(s0*c3 + s3*c0*c12) - l7*(s0*c3 + s3*c0*c12) - l8*((s0*s3 - c0*c3*c12)*s4 - s12*c0*c4);
-        J_(0,1) = (l3*c1 + l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
-        J_(0,2) = (l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
-        J_(0,3) = l6*(s0*c3*c12 + s3*c0) - l7*(s0*c3*c12 + s3*c0) + l8*(-s0*s3*c12 + c0*c3)*s4;
-        J_(0,4) = l8*((s0*c3*c12 + s3*c0)*c4 - s0*s4*s12);
-        J_(1,0) = -l2*c0 + l3*s0*s1 + l4*c0 + l5*s0*s12 - l6*(-s0*s3*c12 + c0*c3) + l7*(-s0*s3*c12 + c0*c3) + l8*((s0*c3*c12 + s3*c0)*s4 + s0*s12*c4);
-        J_(1,1) = (-l3*c1 - l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
-        J_(1,2) = (-l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
-        J_(1,3) = l6*(s0*s3 - c0*c3*c12) - l7*(s0*s3 - c0*c3*c12) + l8*(s0*c3 + s3*c0*c12)*s4;
-        J_(1,4) = l8*((s0*s3 - c0*c3*c12)*c4 + s4*s12*c0);
-        J_(2,1) = -l3*s1 - l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
-        J_(2,2) = -l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
-        J_(2,3) = (-l6*c3 + l7*c3 + l8*s3*s4)*s12;
-        J_(2,4) = -l8*(s4*c12 + s12*c3*c4);
-        J_(3,1) = c0;
-        J_(3,2) = c0;
-        J_(3,3) = s0*s12;
-        J_(3,4) = -s0*s3*c12 + c0*c3;
-        J_(3,5) = s0*s4*c3*c12 + s0*s12*c4 + s3*s4*c0;
-        J_(4,1) = s0;
-        J_(4,2) = s0;
-        J_(4,3) = -s12*c0;
-        J_(4,4) = s0*c3 + s3*c0*c12;
-        J_(4,5) = s0*s3*s4 - s4*c0*c3*c12 - s12*c0*c4;
-        J_(5,0) = 1;
-        J_(5,3) = c12;
-        J_(5,4) = s3*s12;
-        J_(5,5) = -s4*s12*c3 + c4*c12;
+        J(0,0) = l2*s0 + l3*s1*c0 - l4*s0 + l5*s12*c0 + l6*(s0*c3 + s3*c0*c12) - l7*(s0*c3 + s3*c0*c12) - l8*((s0*s3 - c0*c3*c12)*s4 - s12*c0*c4);
+        J(0,1) = (l3*c1 + l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
+        J(0,2) = (l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
+        J(0,3) = l6*(s0*c3*c12 + s3*c0) - l7*(s0*c3*c12 + s3*c0) + l8*(-s0*s3*c12 + c0*c3)*s4;
+        J(0,4) = l8*((s0*c3*c12 + s3*c0)*c4 - s0*s4*s12);
+        J(1,0) = -l2*c0 + l3*s0*s1 + l4*c0 + l5*s0*s12 - l6*(-s0*s3*c12 + c0*c3) + l7*(-s0*s3*c12 + c0*c3) + l8*((s0*c3*c12 + s3*c0)*s4 + s0*s12*c4);
+        J(1,1) = (-l3*c1 - l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
+        J(1,2) = (-l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
+        J(1,3) = l6*(s0*s3 - c0*c3*c12) - l7*(s0*s3 - c0*c3*c12) + l8*(s0*c3 + s3*c0*c12)*s4;
+        J(1,4) = l8*((s0*s3 - c0*c3*c12)*c4 + s4*s12*c0);
+        J(2,1) = -l3*s1 - l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
+        J(2,2) = -l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
+        J(2,3) = (-l6*c3 + l7*c3 + l8*s3*s4)*s12;
+        J(2,4) = -l8*(s4*c12 + s12*c3*c4);
+        J(3,1) = c0;
+        J(3,2) = c0;
+        J(3,3) = s0*s12;
+        J(3,4) = -s0*s3*c12 + c0*c3;
+        J(3,5) = s0*s4*c3*c12 + s0*s12*c4 + s3*s4*c0;
+        J(4,1) = s0;
+        J(4,2) = s0;
+        J(4,3) = -s12*c0;
+        J(4,4) = s0*c3 + s3*c0*c12;
+        J(4,5) = s0*s3*s4 - s4*c0*c3*c12 - s12*c0*c4;
+        J(5,0) = 1;
+        J(5,3) = c12;
+        J(5,4) = s3*s12;
+        J(5,5) = -s4*s12*c3 + c4*c12;
 
-        return J_;
     }
 
 
-
-
-
     // M1013 관절 길이
-    double l1 = 0.1525; // [m]
-    double l2 = 0.1985; // [m]
-    double l3 = 0.620; // [m]
-    double l4 = 0.164; // [m]
-    double l5 = 0.559; // [m]
-    double l6 = 0.146; // [m]
-    double l7 = 0.146; // [m]
-    double l8 = 0.121; // [m]
+    const double l1 = 0.1525; // [m]
+    const double l2 = 0.1985; // [m]
+    const double l3 = 0.620; // [m]
+    const double l4 = 0.164; // [m]
+    const double l5 = 0.559; // [m]
+    const double l6 = 0.146; // [m]
+    const double l7 = 0.146; // [m]
+    const double l8 = 0.121; // [m]
 };
 
 
@@ -362,9 +428,9 @@ int main() {
             ImGui::Dummy(ImVec2(0, 20));
 
             ImGui::Text("Target Transform 설정");
-            ImGui::DragFloat("##Target x", &target_x, 0.01f, -2.0f, 2.0f, "x: %.3f");
-            ImGui::DragFloat("##Target y", &target_y, 0.01f, -2.0f, 2.0f, "y: %.3f");
-            ImGui::DragFloat("##Target z", &target_z, 0.001f, -2.0f, 2.0f, "z: %.3f");
+            ImGui::DragFloat("##Target x", &target_x, 0.01f, -2.3f, 2.3f, "x: %.3f");
+            ImGui::DragFloat("##Target y", &target_y, 0.01f, -2.3f, 2.3f, "y: %.3f");
+            ImGui::DragFloat("##Target z", &target_z, 0.001f, -2.3f, 2.3f, "z: %.3f");
             ImGui::Dummy(ImVec2(0, 10));
             ImGui::DragFloat("##Target Roll", &target_roll, 1.0f, -180.0f, 180.0f, "Roll: %.3f");
             ImGui::DragFloat("##Target Pitch", &target_pitch, 1.0f, -130.0f, 130.0f, "Pitch: %.3f");
@@ -378,15 +444,7 @@ int main() {
 
 
 
-            // Axis Transform 설정
-            joint1.setTransform(m1013.get_fk(1));
-            joint2.setTransform(m1013.get_fk(2));
-            joint3.setTransform(m1013.get_fk(3));
-            joint4.setTransform(m1013.get_fk(4));
-            joint5.setTransform(m1013.get_fk(5));
-            joint6.setTransform(m1013.get_fk(6));
-            t_tip.setTransform(m1013.get_fk(7));
-            m1013.movel(target_x, target_y, target_z, DEG_TO_RAD(target_roll), DEG_TO_RAD(target_pitch), DEG_TO_RAD(target_yaw));
+
 
 
 
@@ -400,16 +458,77 @@ int main() {
 
                 draw_simulation(m1013.J, tf);
 
+                ImGui::Dummy(ImVec2(0, 10));
+
+                // --------------------------------------------------------------------------------
+                // ✨ 매니풀러빌리티 분석 결과 출력 (추가된 부분)
+                // --------------------------------------------------------------------------------
+                mat<3, 6> J_pos = m1013.J.block<3, 6>(0, 0);
+                mat3 M = J_pos * J_pos.transpose();
+                Eigen::SelfAdjointEigenSolver<mat3> eigensolver(M);
+
+                if (eigensolver.info() == Eigen::Success)
+                {
+                    vec3 eigenvalues = eigensolver.eigenvalues();
+                    mat3 eigenvectors = eigensolver.eigenvectors();
+
+                    // draw_simulation에서 사용된 scale 0.3f 적용
+                    float viz_scale = 0.3f;
+                    vec3 radii = eigenvalues.cwiseSqrt() * viz_scale;
+
+                    ImGui::Text("⭐ Position Manipulability Analysis (Scale: %.1f)", viz_scale);
+                    ImGui::Separator();
+
+                    // Eigen은 고유값을 오름차순으로 정렬하는 경향이 있으므로, 2, 1, 0 순서로 출력하여
+                    // 가장 긴 축(Axis 1)부터 보이도록 합니다.
+                    for (int i = 2; i >= 0; --i)
+                    {
+                        ImGui::Text("Axis %d Length (Radius): %.6f", 3 - i, radii(i));
+                        ImGui::Text("  Direction (u%d): X=%.3f, Y=%.3f, Z=%.3f",
+                                    3 - i,
+                                    eigenvectors(0, i), // X component
+                                    eigenvectors(1, i), // Y component
+                                    eigenvectors(2, i)); // Z component
+
+                        if (i == 2) ImGui::Text("  (Longest/Easiest Direction)");
+                        if (i == 0) ImGui::Text("  (Shortest/Most Difficult Direction)");
+                    }
+                }
+                else
+                {
+                    ImGui::Text("Manipulability Analysis Failed.");
+                }
+
+                ImGui::Dummy(ImVec2(0, 10));
+                // --------------------------------------------------------------------------------
+                // 기존 s_val 출력
+                // --------------------------------------------------------------------------------
+                ImGui::Text("s_val (Full Jacobian SVD):");
+                ImGui::Text("s_val1: %.6f", s_val[0]);
+                ImGui::Text("s_val2: %.6f", s_val[1]);
+                ImGui::Text("s_val3: %.6f", s_val[2]);
+                ImGui::Text("s_val4: %.6f", s_val[3]);
+                ImGui::Text("s_val5: %.6f", s_val[4]);
+                ImGui::Text("s_val6: %.6f", s_val[5]);
+
             }
             ImGui::End(); // "제어"
         });
 
+        // Axis Transform 설정
+        joint1.setTransform(m1013.get_fk(1));
+        joint2.setTransform(m1013.get_fk(2));
+        joint3.setTransform(m1013.get_fk(3));
+        joint4.setTransform(m1013.get_fk(4));
+        joint5.setTransform(m1013.get_fk(5));
+        joint6.setTransform(m1013.get_fk(6));
+        t_tip.setTransform(m1013.get_fk(7));
 
-
-
-
-
-
+        auto now = std::chrono::high_resolution_clock::now();
+        m1013.movel(target_x, target_y, target_z, DEG_TO_RAD(target_roll), DEG_TO_RAD(target_pitch), DEG_TO_RAD(target_yaw));
+        auto dt = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - now).count();
+        std::cout << "dt: " << dt << std::endl;
+        // now = std::chrono::high_resolution_clock::now();
     }
     ImGui::stop();
 
@@ -417,12 +536,9 @@ int main() {
 }
 
 
-
-
-
 // -----------------------------------------------
-// 이 아래 코드는 생성하지 않아도됨. 필요시에만 별도로 작성
-// ------------------------------------------------
+// 시각화 함수 (draw_simulation)
+// -----------------------------------------------
 
 
 void draw_simulation(const mat<6, 6>& j, const Transform& fk)
@@ -452,6 +568,7 @@ void draw_simulation(const mat<6, 6>& j, const Transform& fk)
         DrawLinkLine(joint5, joint6);
         DrawLinkLine(joint6, t_tip);
 
+        // J_position (3x6)을 사용하여 매니풀러빌리티 타원체를 그림
         mat<3, 6> j_pos = j.block<3, 6>(0, 0);
         imgui_draw_manipulability(j_pos, fk.trans(), 0.3f, ImVec4(0,1,1,0.1f));
 
