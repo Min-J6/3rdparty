@@ -15,17 +15,7 @@
 #include <string>
 #include <stdexcept>
 #include <bits/this_thread_sleep.h>
-
-// Eigen 라이브러리를 사용하여 SelfAdjointEigenSolver를 사용하기 위한 최소한의 정의
-// (실제 코드 환경에서는 이미 포함되어 있을 것으로 가정합니다.)
 #include <Eigen/Dense>
-
-
-#include <iostream>
-#include <cmath>
-#include <iomanip>
-#include <Eigen/Dense>
-
 
 
 
@@ -135,12 +125,11 @@ public:
     {
         limits[0] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         limits[1] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
-        limits[2] = {DEG_TO_RAD(20.0), DEG_TO_RAD(160.0)};
+        limits[2] = {DEG_TO_RAD(-160.0), DEG_TO_RAD(160.0)};
         limits[3] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         limits[4] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         limits[5] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
 
-        lambda = 0.01;
 
         lambda = 0.01;                  // IK 반복에서 동적으로 변경될 현재 람다 값
         lambda_min = 0.01;              // (기본값)
@@ -242,71 +231,100 @@ private:
     }
 
 
+    vec<6> solve_qp_box_constrained(const mat<6, 6>& H, const vec<6>& g,
+                                    const vec<6>& lb, const vec<6>& ub)
+    {
+        vec<6> x = vec<6>::Zero(); // 초기값 0
+        int max_iter = 100;
+        double tol = 1e-6;
+
+        for (int iter = 0; iter < max_iter; ++iter) {
+            double max_diff = 0.0;
+
+            // 각 변수(joint)에 대해 하나씩 업데이트 (Gauss-Seidel)
+            for (int i = 0; i < 6; ++i) {
+                double old_xi = x(i);
+
+                // H*x + g = 0  =>  sum(H_ij * x_j) + g_i = 0
+                // H_ii * x_i + sum_{j!=i}(H_ij * x_j) + g_i = 0
+                // x_i = ( -g_i - sum_{j!=i}(H_ij * x_j) ) / H_ii
+
+                double sigma = 0.0;
+                for (int j = 0; j < 6; ++j) {
+                    if (i != j) sigma += H(i, j) * x(j);
+                }
+
+                double x_unc = (-g(i) - sigma) / H(i, i);
+
+                // Projection (Clamping)
+                double x_new = std::max(lb(i), std::min(ub(i), x_unc));
+
+                x(i) = x_new;
+                max_diff = std::max(max_diff, std::abs(x_new - old_xi));
+            }
+
+            // 수렴 확인
+            if (max_diff < tol) break;
+        }
+        return x;
+    }
+
+
     vec<6> ik(const Transform& target_tf)
     {
-        double CONVERGENCE_TOLERANCE = 0.01;
-        int MAX_ITER = 200;
-        double ALPHA = 0.001;
+        double CONVERGENCE_TOLERANCE = 0.001;
+        int MAX_IK_ITER = 200;
+        double STEP_SIZE = 0.0001;
 
-        auto q = q_rad;
+        auto q_curr = q_rad;
 
-        for (int iter = 0; iter < MAX_ITER; ++iter){
+        for (int iter = 0; iter < MAX_IK_ITER; ++iter)
+        {
+            // 1. 오차 계산
+            Transform current_tf = fk(q_curr[0], q_curr[1], q_curr[2], q_curr[3], q_curr[4], q_curr[5]);
+            vec<6> error_twist = target_tf - current_tf; // Log map error
+            vec<6> dx;
+            dx << error_twist.head<3>(), error_twist.tail<3>();
 
-            // --- 오차 계산 --- //
-            const Transform current_tf = fk(q[0], q[1], q[2], q[3], q[4], q[5]);
+            if (dx.norm() < CONVERGENCE_TOLERANCE) break;
 
-            const vec<6> error_twist = target_tf - current_tf;
-            const vec3 pos_error = error_twist.head<3>();      // 위치 오차
-            const vec3 ori_error = error_twist.tail<3>();      // 회전 오차
+            // 2. Jacobian 및 Hessian 구성
+            J = jacobian(q_curr[0], q_curr[1], q_curr[2], q_curr[3], q_curr[4], q_curr[5]);
 
-            const vec<6> dx = {
-                pos_error.x(), pos_error.y(), pos_error.z(),
-                ori_error.x(), ori_error.y(), ori_error.z()
-            };
+            mat<6, 6> H = J.transpose() * J;
+            // 댐핑 추가 (특이점 근처 안정성 확보 및 H_ii가 0이 되는 것 방지)
+            for (int i = 0; i < 6; i++) H(i, i) += lambda;
 
+            vec<6> g = -J.transpose() * dx;
 
-            // --- 수렴 확인 ----
-            if (dx.norm() < CONVERGENCE_TOLERANCE) {
-                break;
+            // 3. 제약조건 (Local Bounds for dq)
+            vec<6> lb, ub;
+            double step_limit = 5.0; // 한번에 너무 튀지 않게 안전장치
+            double safety = 0.00;    // 관절 한계 살짝 안쪽까지만 허용
+
+            for(int i=0; i<6; ++i) {
+                // 현재 각도에서 얼마나 더 움직일 수 있는가?
+                double d_min = (limits[i].min + safety) - q_curr[i];
+                double d_max = (limits[i].max - safety) - q_curr[i];
+
+                // 너무 큰 스텝 방지 (Local approximation 유효성 유지)
+                lb(i) = d_min; // std::max(d_min, -step_limit);
+                ub(i) = d_max; // std::min(d_max, step_limit);
             }
 
+            // 4. 직접 만든 QP Solver 호출
+            vec<6> dq = solve_qp_box_constrained(H, g, lb, ub);
 
-
-            // 자코비안 행렬
-            J = jacobian( q[0], q[1], q[2], q[3], q[4], q[5] );
-
-            // J = U * S * Vᵀ (SVD)
-            const SVDResult svd = SVD_LAPACK(J);
-
-            // SVD 결과에서 U, V, 특잇값 S를 추출
-            const mat<6, 6> Ut = svd.U.transpose();
-            const mat<6, 6> V  = svd.Vt.transpose();
-            mat<6, 6> S        = mat<6, 6>::Zero();
-
-
-            // |      sᵢ
-            // |----------------
-            // |  (sᵢ² + λ²)
-            for (int i = 0; i < 6; ++i) {
-                const double s_i = svd.S_values[i];
-                S(i, i) = s_i / (s_i * s_i + lambda * lambda);
-            }
-
-
-            // DLS 유사 역행렬: J_DLS⁺ = V * S⁺ * Uᵀ
-            J_inv = V * S * Ut;
-
-
-            const vec<6> dq = J_inv * dx * ALPHA;
-
-
-            // 최종 각도 업데이트
-            for (int i = 0; i < 6; ++i)
-                q[i] = NORM_RAD_180(q[i] + dq(i));
+            // 5. 업데이트
+            q_curr += dq * STEP_SIZE;
         }
 
+        for (int i=0; i<6; ++i)
+        {
+            q_curr[i] = NORM_RAD_180(q_curr[i]);
+        }
 
-        return q;
+        return q_curr;
     }
 
 
