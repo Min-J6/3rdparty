@@ -30,6 +30,7 @@ target_include_directories(Test_Robot_DooSan_M1013 PUBLIC
 target_link_libraries(Test_Robot_DooSan_M1013 PUBLIC
         imgui
         Eigen3::Eigen
+        osqp::osqp
         ${LAPACK_LIBRARIES}
         ${BLAS_LIBRARIES}
 )

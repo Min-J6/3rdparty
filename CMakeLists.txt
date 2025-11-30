@@ -17,6 +17,7 @@ add_subdirectory(lib/CycloneDDS)
 add_executable(main
     main.cpp
 )
+
 # 🚀 SIMD 최적화 플래그: Eigen 및 기타 연산을 위해 추가합니다.
 #target_compile_options(main PRIVATE
 #    -O3                             # 최고 수준의 최적화
@@ -27,24 +28,13 @@ add_executable(main
 
 target_link_libraries(main PRIVATE imgui Eigen3::Eigen)
 
-# ==========================================================
-# 🛑 BLAS/LAPACK 링크 수정 (OpenBLAS 사용)
-# ==========================================================
-# OpenBLAS를 설치했다면, CMake는 FindBLAS/FindLAPACK을 실행할 때
-# 최적화된 OpenBLAS 라이브러리를 자동으로 찾을 가능성이 높습니다.
-# 만약 찾지 못하면 아래처럼 명시적으로 OpenBLAS를 찾아 링크해야 합니다.
 
 find_package(LAPACK REQUIRED)
 find_package(BLAS REQUIRED)
+find_package(osqp REQUIRED)
 
-# **옵션 A: CMake가 자동으로 OpenBLAS를 찾은 경우 (대부분 이 경우)**
 target_link_libraries(main PRIVATE ${LAPACK_LIBRARIES})
 target_link_libraries(main PRIVATE ${BLAS_LIBRARIES})
-
-# **옵션 B: CMake가 OpenBLAS를 찾지 못할 경우**
-# 주석을 해제하고 OpenBLAS를 명시적으로 찾습니다.
-# find_package(OpenBLAS REQUIRED)
-# target_link_libraries(main PRIVATE OpenBLAS::OpenBLAS)
 
 
 add_subdirectory(test)

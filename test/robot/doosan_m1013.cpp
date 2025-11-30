@@ -21,6 +21,15 @@
 #include <Eigen/Dense>
 
 
+#include <iostream>
+#include <cmath>
+#include <iomanip>
+#include <Eigen/Dense>
+
+
+
+
+
 vec<6> s_val = vec<6>::Zero();
 
 
@@ -118,18 +127,25 @@ public:
     mat<6, 6> J;                        // 자코비안 매트릭스
     mat<6, 6> J_inv;
     double lambda;                      // Damping Factor (특이점 방지용)
-
+    double lambda_min;                  // 최소 감쇠 인자 (기본값)
+    double lambda_max;                  // 최대 감쇠 인자
+    double sigma_threshold;             // 특잇값 임계치 (epsilon)
 
     M1013()
     {
-        limits[0] = {DEG_TO_RAD(-0.0), DEG_TO_RAD(180.0)};
+        limits[0] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         limits[1] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
-        limits[2] = {DEG_TO_RAD(-0.0), DEG_TO_RAD(160.0)};
+        limits[2] = {DEG_TO_RAD(20.0), DEG_TO_RAD(160.0)};
         limits[3] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         limits[4] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         limits[5] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
 
         lambda = 0.01;
+
+        lambda = 0.01;                  // IK 반복에서 동적으로 변경될 현재 람다 값
+        lambda_min = 0.01;              // (기본값)
+        lambda_max = 0.5;               // 특이점에서의 최대 감쇠 (큰 값으로 설정 가능)
+        sigma_threshold = 0.05;         // 이 값보다 σ_min이 작아지면 람다 증가 시작
 
         J = mat<6, 6>::Zero();
 
@@ -226,96 +242,78 @@ private:
     }
 
 
-    // Inverse Kinematics
     vec<6> ik(const Transform& target_tf)
     {
-const double gamma = 0.01;
-    double k_s = 1.0;
+        double CONVERGENCE_TOLERANCE = 0.01;
+        int MAX_ITER = 200;
+        double ALPHA = 0.001;
 
-    // ----------------------------------------------------
-    // IK 설정 상수
-    // ----------------------------------------------------
-    const int MAX_ITER = 200;
-    const double CONVERGENCE_TOLERANCE = 0.01;
-    // ALPHA는 비례 게인 K와 시간 간격 dt를 모두 포함하는 IK 스텝 크기 (Learning Rate) 역할
-    const double ALPHA = 0.0003;
+        auto q = q_rad;
 
+        for (int iter = 0; iter < MAX_ITER; ++iter){
 
-    // 초기 각도 설정 (현재 로봇 자세에서 시작)
-    auto q = q_rad;
+            // --- 오차 계산 --- //
+            const Transform current_tf = fk(q[0], q[1], q[2], q[3], q[4], q[5]);
 
+            const vec<6> error_twist = target_tf - current_tf;
+            const vec3 pos_error = error_twist.head<3>();      // 위치 오차
+            const vec3 ori_error = error_twist.tail<3>();      // 회전 오차
 
-    for (int iter = 0; iter < MAX_ITER; ++iter)
-    {
-        // --- 오차 계산 계산 --- //
-        const Transform current_tf = fk(q[0], q[1], q[2], q[3], q[4], q[5]);
-
-        const vec<6> error_twist = target_tf - current_tf;
-        const vec3 pos_error = error_twist.head<3>();      // 위치 오차
-        const vec3 ori_error = error_twist.tail<3>();      // 회전 오차
-
-        // 오차 벡터 dx (6x1: [pos_error; ori_error]) -> J-PARSE의 입력 t_des에 비례하는 오차
-        const vec<6> dx = {
-            pos_error.x(), pos_error.y(), pos_error.z(),
-            ori_error.x(), ori_error.y(), ori_error.z()
-        };
-
-        // 수렴 확인
-        if (dx.norm() < CONVERGENCE_TOLERANCE) {
-            break;
-        }
+            const vec<6> dx = {
+                pos_error.x(), pos_error.y(), pos_error.z(),
+                ori_error.x(), ori_error.y(), ori_error.z()
+            };
 
 
-        // --- J-PARSE 로직 시작 --- //
-
-        jacobian( q[0], q[1], q[2], q[3], q[4], q[5] );
-        const auto svd = SVD_LAPACK(J);
-
-        // ... (중략: J-PARSE 행렬 구성 로직은 이전과 동일하므로 생략) ...
-        double sigma_max = svd.S_values.maxCoeff();
-        mat<6, 6> Sigma_s_pseudo_inverse = mat<6, 6>::Zero();
-        mat<6, 6> S_matrix = mat<6, 6>::Identity();
-
-        for (int i = 0; i < 6; ++i) {
-            double sigma_i = svd.S_values(i);
-            if (sigma_i < gamma * sigma_max) {
-                double sigma_s_i = gamma * sigma_max;
-                Sigma_s_pseudo_inverse(i, i) = 1.0 / sigma_s_i;
-                double s_ii = k_s * (sigma_i / sigma_s_i);
-                S_matrix(i, i) = s_ii;
-            } else {
-                Sigma_s_pseudo_inverse(i, i) = 1.0 / sigma_i;
-                S_matrix(i, i) = 1.0;
+            // --- 수렴 확인 ----
+            if (dx.norm() < CONVERGENCE_TOLERANCE) {
+                break;
             }
+
+
+
+            // 자코비안 행렬
+            J = jacobian( q[0], q[1], q[2], q[3], q[4], q[5] );
+
+            // J = U * S * Vᵀ (SVD)
+            const SVDResult svd = SVD_LAPACK(J);
+
+            // SVD 결과에서 U, V, 특잇값 S를 추출
+            const mat<6, 6> Ut = svd.U.transpose();
+            const mat<6, 6> V  = svd.Vt.transpose();
+            mat<6, 6> S        = mat<6, 6>::Zero();
+
+
+            // |      sᵢ
+            // |----------------
+            // |  (sᵢ² + λ²)
+            for (int i = 0; i < 6; ++i) {
+                const double s_i = svd.S_values[i];
+                S(i, i) = s_i / (s_i * s_i + lambda * lambda);
+            }
+
+
+            // DLS 유사 역행렬: J_DLS⁺ = V * S⁺ * Uᵀ
+            J_inv = V * S * Ut;
+
+
+            const vec<6> dq = J_inv * dx * ALPHA;
+
+
+            // 최종 각도 업데이트
+            for (int i = 0; i < 6; ++i)
+                q[i] = NORM_RAD_180(q[i] + dq(i));
         }
-        // J-PARSE 역행렬 (J_parse_plus) 계산
-        mat<6, 6> J_parse_plus = svd.Vt.transpose() * Sigma_s_pseudo_inverse * S_matrix * svd.U.transpose();
-
-        // --- J-PARSE 로직 종료 --- //
 
 
-        // 4. 조인트 속도 계산 및 스텝 크기 적용
-        // dq = J_parse_plus * dx * ALPHA
-        // J_parse_plus * dx는 원하는 조인트 속도(q_dot_des)를 나타냅니다.
-        // ALPHA는 학습률 또는 시간 간격 dt에 해당하는 스텝 크기(게인 K)를 포함합니다.
-        vec<6> dq = J_parse_plus * dx * ALPHA;
-
-
-        // 5. 조인트 각도 업데이트 (적분)
-        // q(t+dt) = q(t) + dq(t)
-        // IK 루프에서는 다음 반복(iteration)을 위한 각도 업데이트입니다.
-        q = q + dq;
-
-
-    }
-
-    return q;
+        return q;
     }
 
 
     // 자코비안 행렬
-    void jacobian(double q0, double q1, double q2, double q3, double q4, double q5)
+    mat<6, 6> jacobian(double q0, double q1, double q2, double q3, double q4, double q5)
     {
+        mat<6, 6> J_ = mat<6, 6>::Zero();
 
         const double c0 = std::cos(q0);
         const double c1 = std::cos(q1);
@@ -329,35 +327,36 @@ const double gamma = 0.01;
         const double s12 = std::sin(q1 + q2);
 
 
-        J(0,0) = l2*s0 + l3*s1*c0 - l4*s0 + l5*s12*c0 + l6*(s0*c3 + s3*c0*c12) - l7*(s0*c3 + s3*c0*c12) - l8*((s0*s3 - c0*c3*c12)*s4 - s12*c0*c4);
-        J(0,1) = (l3*c1 + l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
-        J(0,2) = (l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
-        J(0,3) = l6*(s0*c3*c12 + s3*c0) - l7*(s0*c3*c12 + s3*c0) + l8*(-s0*s3*c12 + c0*c3)*s4;
-        J(0,4) = l8*((s0*c3*c12 + s3*c0)*c4 - s0*s4*s12);
-        J(1,0) = -l2*c0 + l3*s0*s1 + l4*c0 + l5*s0*s12 - l6*(-s0*s3*c12 + c0*c3) + l7*(-s0*s3*c12 + c0*c3) + l8*((s0*c3*c12 + s3*c0)*s4 + s0*s12*c4);
-        J(1,1) = (-l3*c1 - l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
-        J(1,2) = (-l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
-        J(1,3) = l6*(s0*s3 - c0*c3*c12) - l7*(s0*s3 - c0*c3*c12) + l8*(s0*c3 + s3*c0*c12)*s4;
-        J(1,4) = l8*((s0*s3 - c0*c3*c12)*c4 + s4*s12*c0);
-        J(2,1) = -l3*s1 - l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
-        J(2,2) = -l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
-        J(2,3) = (-l6*c3 + l7*c3 + l8*s3*s4)*s12;
-        J(2,4) = -l8*(s4*c12 + s12*c3*c4);
-        J(3,1) = c0;
-        J(3,2) = c0;
-        J(3,3) = s0*s12;
-        J(3,4) = -s0*s3*c12 + c0*c3;
-        J(3,5) = s0*s4*c3*c12 + s0*s12*c4 + s3*s4*c0;
-        J(4,1) = s0;
-        J(4,2) = s0;
-        J(4,3) = -s12*c0;
-        J(4,4) = s0*c3 + s3*c0*c12;
-        J(4,5) = s0*s3*s4 - s4*c0*c3*c12 - s12*c0*c4;
-        J(5,0) = 1;
-        J(5,3) = c12;
-        J(5,4) = s3*s12;
-        J(5,5) = -s4*s12*c3 + c4*c12;
+        J_(0,0) = l2*s0 + l3*s1*c0 - l4*s0 + l5*s12*c0 + l6*(s0*c3 + s3*c0*c12) - l7*(s0*c3 + s3*c0*c12) - l8*((s0*s3 - c0*c3*c12)*s4 - s12*c0*c4);
+        J_(0,1) = (l3*c1 + l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
+        J_(0,2) = (l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
+        J_(0,3) = l6*(s0*c3*c12 + s3*c0) - l7*(s0*c3*c12 + s3*c0) + l8*(-s0*s3*c12 + c0*c3)*s4;
+        J_(0,4) = l8*((s0*c3*c12 + s3*c0)*c4 - s0*s4*s12);
+        J_(1,0) = -l2*c0 + l3*s0*s1 + l4*c0 + l5*s0*s12 - l6*(-s0*s3*c12 + c0*c3) + l7*(-s0*s3*c12 + c0*c3) + l8*((s0*c3*c12 + s3*c0)*s4 + s0*s12*c4);
+        J_(1,1) = (-l3*c1 - l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
+        J_(1,2) = (-l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
+        J_(1,3) = l6*(s0*s3 - c0*c3*c12) - l7*(s0*s3 - c0*c3*c12) + l8*(s0*c3 + s3*c0*c12)*s4;
+        J_(1,4) = l8*((s0*s3 - c0*c3*c12)*c4 + s4*s12*c0);
+        J_(2,1) = -l3*s1 - l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
+        J_(2,2) = -l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
+        J_(2,3) = (-l6*c3 + l7*c3 + l8*s3*s4)*s12;
+        J_(2,4) = -l8*(s4*c12 + s12*c3*c4);
+        J_(3,1) = c0;
+        J_(3,2) = c0;
+        J_(3,3) = s0*s12;
+        J_(3,4) = -s0*s3*c12 + c0*c3;
+        J_(3,5) = s0*s4*c3*c12 + s0*s12*c4 + s3*s4*c0;
+        J_(4,1) = s0;
+        J_(4,2) = s0;
+        J_(4,3) = -s12*c0;
+        J_(4,4) = s0*c3 + s3*c0*c12;
+        J_(4,5) = s0*s3*s4 - s4*c0*c3*c12 - s12*c0*c4;
+        J_(5,0) = 1;
+        J_(5,3) = c12;
+        J_(5,4) = s3*s12;
+        J_(5,5) = -s4*s12*c3 + c4*c12;
 
+        return J_;
     }
 
 
