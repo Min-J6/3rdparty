@@ -108,7 +108,7 @@ private:
 // ===================================================================
 //  링크선 그리기 함수 (노란색)
 // ===================================================================
-void DrawLinkLine(const AxisObject& from, const AxisObject& to)
+void DrawLinkLine(const AxisObject& from, const AxisObject& to, const ImVec4& color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f))
 {
     float from_x, from_y, from_z;
     float to_x, to_y, to_z;
@@ -121,7 +121,7 @@ void DrawLinkLine(const AxisObject& from, const AxisObject& to)
     float line_z[2] = {from_z, to_z};
 
     // 노란색으로 링크선 그리기
-    ImPlot3D::PushStyleColor(ImPlot3DCol_Line, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
+    ImPlot3D::PushStyleColor(ImPlot3DCol_Line, color);
     ImPlot3D::PlotLine("Link", line_x, line_y, line_z, 2);
     ImPlot3D::PopStyleColor();
 }

@@ -202,7 +202,7 @@ public:
     std::array<Transform, 8> tf;        // 각 조인트의 transform
     std::optional<Transform> tf_ee;     // 엔드 이펙터 transform
 
-    std::array<JointLimits, 6> limits;  // 각도 제한 조건
+    std::array<JointLimits, 6> joint_limits;  // 각도 제한 조건
 
     mat<6, 6> J;                        // 자코비안 매트릭스
     double lambda;                      // Damping Factor (특이점 방지용)
@@ -210,12 +210,12 @@ public:
 
     M1013()
     {
-        limits[0] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
-        limits[1] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
-        limits[2] = {DEG_TO_RAD(-150.0), DEG_TO_RAD(150.0)};
-        limits[3] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
-        limits[4] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
-        limits[5] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+        joint_limits[0] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+        joint_limits[1] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+        joint_limits[2] = {DEG_TO_RAD(-150.0), DEG_TO_RAD(150.0)};
+        joint_limits[3] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+        joint_limits[4] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
+        joint_limits[5] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
 
         lambda = 0.01;
 
@@ -378,8 +378,8 @@ private:
 
         for(int i=0; i<6; ++i) {
             double current_rad = q[i];
-            double min_rad = limits[i].min;
-            double max_rad = limits[i].max;
+            double min_rad = joint_limits[i].min;
+            double max_rad = joint_limits[i].max;
 
             // dq는 "변위"이므로, 현재 위치에서 갈 수 있는 최대/최소 변위를 구함
             // 안전 여유(Buffer)를 조금 둘 수도 있음
