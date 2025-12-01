@@ -31,7 +31,6 @@ target_link_libraries(main PRIVATE imgui Eigen3::Eigen)
 
 find_package(LAPACK REQUIRED)
 find_package(BLAS REQUIRED)
-find_package(osqp REQUIRED)
 
 target_link_libraries(main PRIVATE ${LAPACK_LIBRARIES})
 target_link_libraries(main PRIVATE ${BLAS_LIBRARIES})
