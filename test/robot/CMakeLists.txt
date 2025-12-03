@@ -4,8 +4,7 @@ cmake_minimum_required(VERSION 3.10)
 
 
 # 두산 로봇 IK 예제
-add_executable(Test_Robot_DooSan_M1013 doosan_m1013.cpp
-        g.cpp)
+add_executable(Test_Robot_DooSan_M1013 doosan_m1013.cpp)
 
 
 
