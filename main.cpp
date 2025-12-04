@@ -529,9 +529,9 @@ int main() {
 
 
             float x, y, z;
-            x = fk.trans().x();
-            y = fk.trans().y();
-            z = fk.trans().z();
+            x = fk.translation().x();
+            y = fk.translation().y();
+            z = fk.translation().z();
             ImGui::Text("x: %.3f, y: %.3f, z: %.3f", x, y, z);
 
             float roll = fk.roll();
@@ -564,7 +564,7 @@ int main() {
 
                 // Manipulability ellipsoid 그리기
                 Transform::mat<3, 6> j_position_final = j.block<3, 6>(0, 0);
-                draw_manipulabilityEllipsoid(j_position_final, fk.trans(), 0.5f, ImVec4(0.0f, 1.0f, 1.0f, 0.1f));
+                draw_manipulabilityEllipsoid(j_position_final, fk.translation(), 0.5f, ImVec4(0.0f, 1.0f, 1.0f, 0.1f));
 
 
                 ImPlot3D::EndPlot();

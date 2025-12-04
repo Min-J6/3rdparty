@@ -319,12 +319,12 @@ private:
 
 
         // 위치 오차
-        vec3 pos_error = target_tf.trans() - fk(q[0], q[1], q[2], q[3], q[4], q[5]).trans();
+        vec3 pos_error = target_tf.translation() - fk(q[0], q[1], q[2], q[3], q[4], q[5]).translation();
 
 
         // 회전 오차
-        mat3 R_cur = fk(q[0], q[1], q[2], q[3], q[4], q[5]).rot();
-        mat3 R_tar = target_tf.rot();
+        mat3 R_cur = fk(q[0], q[1], q[2], q[3], q[4], q[5]).rotation();
+        mat3 R_tar = target_tf.rotation();
 
         // 상대 회전 행렬 계산 (R_diff = R_target * R_current^T)
         // 이 순서로 곱해야 "Global Frame(Base)" 기준의 오차가 계산됨
@@ -646,7 +646,7 @@ void draw_simulation(const mat<6, 6>& j, const Transform& fk)
         DrawLinkLine(joint6, t_tip);
 
         mat<3, 6> j_pos = j.block<3, 6>(0, 0);
-        imgui_draw_manipulability(j_pos, fk.trans(), 0.3f, ImVec4(0,1,1,0.1f));
+        imgui_draw_manipulability(j_pos, fk.translation(), 0.3f, ImVec4(0,1,1,0.1f));
 
         ImPlot3D::EndPlot();
     }

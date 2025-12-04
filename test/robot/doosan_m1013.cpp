@@ -181,7 +181,7 @@ public:
     {
         const quat t_rot(
             AngleAxis(yaw, vec3::UnitZ()) *
-            AngleAxis(pitch + M_PI_2, vec3::UnitY()) *
+            AngleAxis(pitch , vec3::UnitY()) * // + M_PI_2
             AngleAxis(roll, vec3::UnitZ()));
 
         const vec3 t_pos(x, y, z);
@@ -340,7 +340,7 @@ private:
 
 
 
-            vec3 curr_pos = current_tf.trans();
+            vec3 curr_pos = current_tf.translation();
 
             // QP: Workspace Limit
             // 범위에 도달할 경우 해당 축방향의 속도를 감속시킴
@@ -530,8 +530,10 @@ int main() {
 
 
             // 3. 상태 모니터링
-            vec3 pos = m1013.get_ee_fk().trans();
+            vec3 pos = m1013.get_ee_fk().translation();
             ImGui::TextColored(ImVec4(0,1,1,1), "Current EE: (%.3f, %.3f, %.3f)", pos.x(), pos.y(), pos.z());
+            vec3 rpy = Transform::rpy(m1013.get_ee_fk());
+            ImGui::TextColored(ImVec4(0,1,1,1), "Current EE: (%.3f, %.3f, %.3f)", RAD_TO_DEG(rpy.x()), NORM_DEG_180( (RAD_TO_DEG(rpy.y()) )), RAD_TO_DEG(rpy.z()));
 
             // 위반 경고
             bool violated = false;
@@ -638,7 +640,7 @@ void draw_simulation(const mat<6, 6>& j, const Transform& fk, const vec3& ws_min
 
         // 매니풀러빌리티 타원체
         mat<3, 6> j_pos = j.block<3, 6>(0, 0);
-        imgui_draw_manipulability(j_pos, fk.trans(), 0.15f, ImVec4(0,1,1,0.05f));
+        imgui_draw_manipulability(j_pos, fk.translation(), 0.15f, ImVec4(0,1,1,0.05f));
 
         ImPlot3D::EndPlot();
     }
