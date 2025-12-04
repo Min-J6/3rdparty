@@ -91,10 +91,6 @@ public:
     // 관절 제한
     std::array<JointLimits, 6> joint_limits;    // 관절 제한
 
-
-
-
-public:
     enum TF_Name_ {
         TF_Base,
         TF_Joint1,
@@ -110,8 +106,7 @@ public:
 
     M1013()
     {
-
-        // 1. 관절 제한 설정
+        // 관절 제한 설정
         joint_limits[0] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         joint_limits[1] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         joint_limits[2] = {DEG_TO_RAD(10.0),   DEG_TO_RAD(160.0)};
@@ -120,7 +115,7 @@ public:
         joint_limits[5] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
 
 
-        // 2. 초기 자세
+        // 초기 자세
         q_rad.setZero();
         q_rad[0] = DEG_TO_RAD(0.0);
         q_rad[1] = DEG_TO_RAD(0.0);
@@ -130,13 +125,16 @@ public:
         q_rad[5] = DEG_TO_RAD(0.0);
 
 
-        // 3. 작업 영역 초기화
+        // 작업 영역 초기화
         workspace_min = vec3(-1.3, -1.3, 0.0);
         workspace_max = vec3( 1.3,  1.3, 1.0);
 
 
+        // Jacobian 초기화
         J = mat<6, 6>::Zero();
 
+
+        // Forward Kinematics 계산
         fk(q_rad[0], q_rad[1], q_rad[2], q_rad[3], q_rad[4], q_rad[5]);
     }
 
@@ -181,7 +179,7 @@ public:
     {
         const quat t_rot(
             AngleAxis(yaw, vec3::UnitZ()) *
-            AngleAxis(pitch , vec3::UnitY()) * // + M_PI_2
+            AngleAxis(pitch , vec3::UnitY()) *
             AngleAxis(roll, vec3::UnitZ()));
 
         const vec3 t_pos(x, y, z);
@@ -313,18 +311,10 @@ private:
     // ----------------------------------------------------
     vec<6> ik(const Transform& target_tf)
     {
-
-
-
-
-
-
-
         vec<6> q = q_rad;
 
         for (int iter = 0; iter < MAX_IK_ITER; ++iter)
         {
-
             // 오차 계산
             Transform current_tf = fk(q[0], q[1], q[2], q[3], q[4], q[5]);
 
@@ -339,8 +329,8 @@ private:
                 break;
 
 
-
             vec3 curr_pos = current_tf.translation();
+
 
             // QP: Workspace Limit
             // 범위에 도달할 경우 해당 축방향의 속도를 감속시킴
@@ -395,7 +385,6 @@ private:
             vec<6> g = -J.transpose() * dx;
 
 
-
             // QP: 관절 범위 제한
             vec<6> lb, ub;
             for(int i=0; i<6; ++i) {
@@ -417,6 +406,7 @@ private:
         // 각도 정규화
         for (int i=0; i<6; ++i)
             q[i] = NORM_RAD_180(q[i]);
+
 
         return q;
     }

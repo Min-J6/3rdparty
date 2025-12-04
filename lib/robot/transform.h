@@ -46,12 +46,14 @@ public:
     explicit Transform(const mat4& H) : T_(H) {}
 
     // 이동 → 회전으로 보고 FK를 설계하면 쉽다
-    Transform(const quat& q, const vec3& t) : T_(Isometry::Identity()) {
+    Transform(const quat& q, const vec3& t) : T_(Isometry::Identity())
+    {
         T_.rotate(q);
         T_.pretranslate(t);
     }
 
-    Transform(const AngleAxis& r, const vec3& t) : T_(Isometry::Identity()) {
+    Transform(const AngleAxis& r, const vec3& t) : T_(Isometry::Identity())
+    {
         T_.rotate(r);
         T_.pretranslate(t);
     }
@@ -70,26 +72,29 @@ public:
 
 
     /// Transform 대입 연산자
-    Transform& operator=(const mat4& m) {
+    Transform& operator=(const mat4& m)
+    {
         this->T_ = m;
         return *this;
     }
 
 
     /// Transform 곱셈 연산자
-    Transform operator*(const Transform& other) const {
+    Transform operator*(const Transform& other) const
+    {
         return Transform(this->T_ * other.T_);
     }
 
 
     /// Transform 뺄셈 연산자
-    vec<6> operator-(const Transform& other) const {
+    vec<6> operator-(const Transform& other) const
+    {
         vec<6> error_twist;
 
-        // 1. 위치 오차 (Position Error)
+        // 위치 오차 (Position Error)
         error_twist.head<3>() = this->translation() - other.translation();
 
-        // 2. 회전 오차 (Orientation Error - Log Map 근사)
+        // 회전 오차 (Orientation Error - Log Map 근사)
         const mat3 R_cur = other.rotation(); // other: current_tf
         const mat3 R_tar = this->rotation(); // this: target_tf
 
@@ -111,7 +116,8 @@ public:
 
 
     /// 매트릭스 접근자
-    double operator()(int row, int col) const {
+    double operator()(int row, int col) const
+    {
         return T_.matrix()(row, col);
     }
 
@@ -127,12 +133,9 @@ public:
 
     static vec3 rpy(const Transform& tf)
     {
-        // RPY 추출은 Transform의 회전 행렬(3x3)을 사용합니다.
-        const Eigen::Matrix3d R = tf.rotation(); // Transform::rot()으로 3x3 회전 행렬을 가져옴
+        const mat3 R = tf.rotation();
 
-        // Eigen::Matrix3d는 0-based 인덱싱을 사용합니다: R(row, col)
-
-        // 1. Pitch (p) 계산: R_31 요소 사용
+        // itch (p) 계산: R_31 요소 사용
         // Pitch 범위: [-pi/2, pi/2]
         double p = std::asin(-R(2, 0)); // R_31
 
@@ -140,31 +143,23 @@ public:
         // Pitch가 +/- 90도 근처일 때 (cos(p)가 0에 가까울 때)
         constexpr double PITCH_THRESHOLD = 1e-6;
 
-        // std::cos(p) 대신 R(2, 2)와 R(2, 1)을 사용해 R(2, 0)의 오차를 회피하는 것이 더 일반적입니다.
+        // std::cos(p) 대신 R(2, 2)와 R(2, 1)을 사용해 R(2, 0)의 오차를 회피
         double cos_p_squared = R(2, 1) * R(2, 1) + R(2, 2) * R(2, 2);
         double cos_p = std::sqrt(cos_p_squared);
 
         double r, y;
 
-        if (cos_p < PITCH_THRESHOLD) { // Gimbal Lock 발생! (p = +/- 90 deg)
-            // Roll과 Yaw가 합쳐지며, Roll을 0으로 설정하고 합쳐진 회전량을 Yaw에 할당합니다.
+        if (cos_p < PITCH_THRESHOLD) {
+            // Gimbal Lock 발생! (p = +/- 90 deg)
             r = 0.0;
-            // Yaw 계산: atan2(R22, R12)를 사용 (R22와 R12의 부호는 Pitch에 따라 다르게 해석됨)
-            // 여기서는 R_12, R_11 대신 R_22, R_12를 사용하는 간략화된 식을 사용합니다.
-            // Yaw (y) = atan2(-R_12, R_13) for p=90
-            // Yaw (y) = atan2(R_12, R_13) for p=-90
-            // 가장 안정적인 단일 공식:
             y = std::atan2(R(0, 1), R(0, 2));
 
-            // R(0, 1)과 R(0, 2)는 R_12와 R_13
-            // R(1, 1)과 R(1, 2)는 R_22와 R_23
-
         } else { // 정상 상황
-            // 2. Yaw (y) 계산: R_21과 R_11 사용
-            y = std::atan2(R(1, 0), R(0, 0)); // R_21 / R_11
+            // Yaw (y)
+            y = std::atan2(R(1, 0), R(0, 0));
 
-            // 3. Roll (r) 계산: R_32와 R_33 사용
-            r = std::atan2(R(2, 1), R(2, 2)); // R_32 / R_33
+            // Roll (r)
+            r = std::atan2(R(2, 1), R(2, 2));
         }
 
         // 원하는 vec3 형태로 반환 (Roll, Pitch, Yaw 순서)
