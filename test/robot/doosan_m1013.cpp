@@ -19,7 +19,6 @@
 
 
 
-
 // ----------------------------------------------------------------------------------
 // 전역 변수 및 시각화 객체
 // ----------------------------------------------------------------------------------
@@ -33,6 +32,8 @@ AxisObject joint5(0.05);
 AxisObject joint6(0.05);
 AxisObject t_tip(0.06);
 AxisObject t_ee(0.1);
+
+using namespace Robot;
 
 // 전방 선언
 void draw_simulation(const mat<6, 6>& j, const Transform& fk, const vec3& ws_min, const vec3& ws_max);
@@ -49,59 +50,56 @@ class M1013 {
     };
 
     // 링크 길이
-    const double l1 = 0.1525; // [m]
-    const double l2 = 0.1985; // [m]
-    const double l3 = 0.620;  // [m]
-    const double l4 = 0.164;  // [m]
-    const double l5 = 0.559;  // [m]
-    const double l6 = 0.146;  // [m]
-    const double l7 = 0.146;  // [m]
-    const double l8 = 0.121;  // [m]
+    const double l1 = 0.1525;
+    const double l2 = 0.1985;
+    const double l3 = 0.620;
+    const double l4 = 0.164;
+    const double l5 = 0.559;
+    const double l6 = 0.146;
+    const double l7 = 0.146;
+    const double l8 = 0.121;
 
     // Ik 설정
-    const double ERROR_IK_TGREASHOLD    = 0.001;    // IK 오차 정밀도
-    const int MAX_IK_ITER               = 500;      // Ik 최대 반복 횟수
-    const double STEP_SIZE              = 0.001;    // Alpha
-    const double WORKSPACE_LIMIT_MARGIN = 0.1;      // 감속 시작 거리 [m]
-    const double LAMBDA                 = 0.1;      // Damping Factor
+    const double ERROR_IK_TGREASHOLD    = 0.001;
+    const int MAX_IK_ITER               = 500;
+    const double STEP_SIZE              = 0.001; // Alpha
+    const double WORKSPACE_LIMIT_MARGIN = 0.1;
+    const double LAMBDA                 = 0.1;
 
     // 관절 범위 제한 설정
-    const double JOINT_STEP_LIMIT = 1.0;            // 한 스텝에 최대 각도 움직임 [rad]
-    const double JOINT_LIMIT_MARGIN = 0.00;         // 제한 각도의 마진
+    const double JOINT_STEP_LIMIT = 1.0;
+    const double JOINT_LIMIT_MARGIN = 0.00;
 
     // QP Solver 설정
-    const int MAX_QP_ITER               = 500;      // QP 최대 반복 횟수
-    const double ERROR_QP_THREASHOLD    = 0.001;    // QP 오차 정밀도
-
+    const int MAX_QP_ITER               = 500;
+    const double ERROR_QP_THREASHOLD    = 0.001;
 
 
     // 로봇 상태 변수
-    std::array<Transform, 9> tf;                // 각 링크 Transform
-    std::optional<Transform> tf_ee;             // EE Offset
+    std::array<Transform, 9> tf;                // 시각화용 (double)
+    std::optional<Transform> tf_ee;             // EE Offset (double)
 
 
 public:
-    vec<6> q_rad;                               // 현재 관절 각도 [rad]
+    vec<6> q_rad;                               // 현재 관절 각도
     mat<6, 6> J;                                // Jacobian
 
     // 작업 영역
-    vec3 workspace_min;                         // 작업 영역 최소값 [m]
-    vec3 workspace_max;                         // 작업 영역 최대값 [m]
+    vec3 workspace_min;
+    vec3 workspace_max;
 
     // 관절 제한
-    std::array<JointLimits, 6> joint_limits;    // 관절 제한
+    std::array<JointLimits, 6> joint_limits;
 
     enum TF_Name_ {
-        TF_Base,
-        TF_Joint1,
-        TF_Joint2,
-        TF_Joint3,
-        TF_Joint4,
-        TF_Joint5,
-        TF_Joint6,
-        TF_Tip,
-        TF_End_Effector
+        TF_Base, TF_Joint1, TF_Joint2, TF_Joint3,
+        TF_Joint4, TF_Joint5, TF_Joint6, TF_Tip, TF_End_Effector
     };
+
+    // ----------------------------------------------------------
+    // AutoDiff 관련 타입 정의
+    // ----------------------------------------------------------
+
 
 
     M1013()
@@ -109,71 +107,49 @@ public:
         // 관절 제한 설정
         joint_limits[0] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         joint_limits[1] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
-        joint_limits[2] = {DEG_TO_RAD(10.0),   DEG_TO_RAD(160.0)};
+        joint_limits[2] = {DEG_TO_RAD(-160.0), DEG_TO_RAD(160.0)};
         joint_limits[3] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         joint_limits[4] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
         joint_limits[5] = {DEG_TO_RAD(-360.0), DEG_TO_RAD(360.0)};
 
-
         // 초기 자세
         q_rad.setZero();
-        q_rad[0] = DEG_TO_RAD(0.0);
-        q_rad[1] = DEG_TO_RAD(0.0);
-        q_rad[2] = DEG_TO_RAD(0.0);
-        q_rad[3] = DEG_TO_RAD(0.0);
-        q_rad[4] = DEG_TO_RAD(0.0);
-        q_rad[5] = DEG_TO_RAD(0.0);
-
 
         // 작업 영역 초기화
         workspace_min = vec3(-1.3, -1.3, 0.0);
         workspace_max = vec3( 1.3,  1.3, 1.0);
 
-
         // Jacobian 초기화
         J = mat<6, 6>::Zero();
 
-
-        // Forward Kinematics 계산
+        // 초기 FK 계산
         fk(q_rad[0], q_rad[1], q_rad[2], q_rad[3], q_rad[4], q_rad[5]);
     }
 
     Transform get_fk(TF_Name_ name ) { return tf[name]; }
     Transform get_ee_fk()
     {
-        if (tf_ee)
-            return tf[TF_End_Effector];
-        else
-            return tf[TF_Tip];
+        return tf_ee ? tf[TF_End_Effector] : tf[TF_Tip];
     }
 
-
-    // ----------------------------------------------------
-    // Move Joint
-    // ----------------------------------------------------
     void set_end_effector(const Transform& tf_ee) { this->tf_ee = tf_ee; }
-
 
     // ----------------------------------------------------
     // Move Joint
     // ----------------------------------------------------
     void movej(double q0, double q1, double q2, double q3, double q4, double q5)
     {
-        q_rad[0] = q0;
-        q_rad[1] = q1;
-        q_rad[2] = q2;
-        q_rad[3] = q3;
-        q_rad[4] = q4;
-        q_rad[5] = q5;
+        q_rad << q0, q1, q2, q3, q4, q5;
 
-        fk(q_rad[0], q_rad[1], q_rad[2], q_rad[3], q_rad[4], q_rad[5]);
+        // FK 업데이트 (시각화용)
+        fk(q0, q1, q2, q3, q4, q5);
 
-        J = jacobian(q_rad[0], q_rad[1], q_rad[2], q_rad[3], q_rad[4], q_rad[5]);
+        // Jacobian 업데이트 (AutoDiff 사용)
+        J = jacobian(q0, q1, q2, q3, q4, q5);
     }
 
-
     // ----------------------------------------------------
-    // Move Linear (QP IK 사용)
+    // Move Linear (QP IK)
     // ----------------------------------------------------
     void movel(double x, double y, double z, double roll, double pitch, double yaw)
     {
@@ -193,11 +169,56 @@ public:
 
 private:
     // ----------------------------------------------------
-    // Forward Kinematics
+    // [핵심] FK Kernel (Template)
+    // T: double 또는 ADScalar
+    // ----------------------------------------------------
+    template <typename T>
+    TransformT<T> fk_kernel(const T& q0, const T& q1, const T& q2, const T& q3, const T& q4, const T& q5)
+    {
+        using Vec3 = Eigen::Matrix<T, 3, 1>;
+        using Axis = Eigen::AngleAxis<T>;
+
+        const Vec3 ax_x = Vec3::UnitX();
+        // const Vec3 ax_y = Vec3::UnitY(); // 미사용
+        const Vec3 ax_z = Vec3::UnitZ();
+
+        // 링크 길이 (double -> T 타입 변환)
+        T tl1(l1), tl2(l2), tl3(l3), tl4(l4), tl5(l5), tl6(l6), tl7(l7), tl8(l8);
+
+        // 각 Transform 계산
+        const TransformT<T> tf0(Axis(T(0), ax_z), Vec3(T(0), T(0), T(0)));
+        const TransformT<T> tf1(Axis(q0,   ax_z), Vec3(T(0), T(0), tl1));
+        const TransformT<T> tf2(Axis(q1,   ax_x), Vec3(-tl2, T(0), T(0)));
+        const TransformT<T> tf3(Axis(q2,   ax_x), Vec3(T(0), T(0), tl3));
+        const TransformT<T> tf4(Axis(q3,   ax_z), Vec3(tl4, T(0), T(0)));
+        const TransformT<T> tf5(Axis(q4,   ax_x), Vec3(-tl6, T(0), tl5));
+        const TransformT<T> tf6(Axis(q5,   ax_z), Vec3(tl7, T(0), T(0)));
+        const TransformT<T> tf7(Axis(T(0), ax_z), Vec3(T(0), T(0), tl8));
+
+        // 체인 곱: Base -> ... -> End
+        TransformT<T> t_curr = tf0;
+
+        // (옵션) 중간 관절 위치가 필요하다면 여기서 저장 가능하지만,
+        // AutoDiff용으로는 End-Effector만 계산하면 효율적입니다.
+        // double 버전에서는 멤버변수 tf[] 업데이트를 위해 각각 계산합니다.
+
+        t_curr = t_curr * tf1;
+        t_curr = t_curr * tf2;
+        t_curr = t_curr * tf3;
+        t_curr = t_curr * tf4;
+        t_curr = t_curr * tf5;
+        t_curr = t_curr * tf6;
+        t_curr = t_curr * tf7; // Tip
+
+        return t_curr;
+    }
+
+    // ----------------------------------------------------
+    // FK (Wrapper for double - 시각화용)
     // ----------------------------------------------------
     Transform fk(double q0, double q1, double q2, double q3, double q4, double q5)
     {
-        // 각 Transform 계산
+        // 1. 각 Transform 개별 계산 (시각화 변수 업데이트를 위해 기존 로직 유지)
         const Transform tf0 = Transform(AngleAxis(0,  vec3::UnitZ()), vec3(0, 0, 0));
         const Transform tf1 = Transform(AngleAxis(q0, vec3::UnitZ()), vec3(0, 0, l1));
         const Transform tf2 = Transform(AngleAxis(q1, vec3::UnitX()), vec3(-l2, 0, 0));
@@ -207,107 +228,134 @@ private:
         const Transform tf6 = Transform(AngleAxis(q5, vec3::UnitZ()), vec3(l7, 0, 0));
         const Transform tf7 = Transform(AngleAxis(0,  vec3::UnitZ()), vec3(0, 0, l8));
 
+        tf[TF_Base]   = tf0;
+        tf[TF_Joint1] = tf[TF_Base]   * tf1;
+        tf[TF_Joint2] = tf[TF_Joint1] * tf2;
+        tf[TF_Joint3] = tf[TF_Joint2] * tf3;
+        tf[TF_Joint4] = tf[TF_Joint3] * tf4;
+        tf[TF_Joint5] = tf[TF_Joint4] * tf5;
+        tf[TF_Joint6] = tf[TF_Joint5] * tf6;
+        tf[TF_Tip]    = tf[TF_Joint6] * tf7;
 
-        // Forward Kinematics 계산
-        tf[TF_Base]   = tf0;                    // base
-        tf[TF_Joint1] = tf[TF_Base]   * tf1;    // 1
-        tf[TF_Joint2] = tf[TF_Joint1] * tf2;    // 2
-        tf[TF_Joint3] = tf[TF_Joint2] * tf3;    // 3
-        tf[TF_Joint4] = tf[TF_Joint3] * tf4;    // 4
-        tf[TF_Joint5] = tf[TF_Joint4] * tf5;    // 5
-        tf[TF_Joint6] = tf[TF_Joint5] * tf6;    // 6
-        tf[TF_Tip]    = tf[TF_Joint6] * tf7;    // tip
-
-
-        // End Effector Transform 계산
         if (tf_ee)
             tf[TF_End_Effector] = tf[TF_Tip] * tf_ee.value();
         else
             tf[TF_End_Effector] = tf[TF_Tip];
-
 
         return tf[TF_End_Effector];
     }
 
 
     // ----------------------------------------------------
-    // Jacobian Matrix
+    // Jacobian (AutoDiff 구현)
     // ----------------------------------------------------
     mat<6, 6> jacobian(double q0, double q1, double q2, double q3, double q4, double q5)
     {
-        mat<6, 6> J_ = mat<6, 6>::Zero();
+        // 1. 입력 변수(Joint)를 AutoDiffScalar로 변환 및 Seed 설정
+        ADScalar q_ad[6];
+        const double q_vals[6] = {q0, q1, q2, q3, q4, q5};
 
-        const double c0 = std::cos(q0); const double c1 = std::cos(q1);
-        const double c3 = std::cos(q3); const double c4 = std::cos(q4);
-        const double s0 = std::sin(q0); const double s1 = std::sin(q1);
-        const double s3 = std::sin(q3); const double s4 = std::sin(q4);
-        const double c12 = std::cos(q1 + q2); const double s12 = std::sin(q1 + q2);
+        for (int i = 0; i < 6; ++i) {
+            q_ad[i].value() = q_vals[i];
+            q_ad[i].derivatives() = vec<6>::Unit(6, i); // 미분 Seed (단위 벡터)
+        }
 
-        J_(0,0) = l2*s0 + l3*s1*c0 - l4*s0 + l5*s12*c0 + l6*(s0*c3 + s3*c0*c12) - l7*(s0*c3 + s3*c0*c12) - l8*((s0*s3 - c0*c3*c12)*s4 - s12*c0*c4);
-        J_(0,1) = (l3*c1 + l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
-        J_(0,2) = (l5*c12 - l6*s3*s12 + l7*s3*s12 - l8*(s4*s12*c3 - c4*c12))*s0;
-        J_(0,3) = l6*(s0*c3*c12 + s3*c0) - l7*(s0*c3*c12 + s3*c0) + l8*(-s0*s3*c12 + c0*c3)*s4;
-        J_(0,4) = l8*((s0*c3*c12 + s3*c0)*c4 - s0*s4*s12);
-        J_(1,0) = -l2*c0 + l3*s0*s1 + l4*c0 + l5*s0*s12 - l6*(-s0*s3*c12 + c0*c3) + l7*(-s0*s3*c12 + c0*c3) + l8*((s0*c3*c12 + s3*c0)*s4 + s0*s12*c4);
-        J_(1,1) = (-l3*c1 - l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
-        J_(1,2) = (-l5*c12 + l6*s3*s12 - l7*s3*s12 + l8*(s4*s12*c3 - c4*c12))*c0;
-        J_(1,3) = l6*(s0*s3 - c0*c3*c12) - l7*(s0*s3 - c0*c3*c12) + l8*(s0*c3 + s3*c0*c12)*s4;
-        J_(1,4) = l8*((s0*s3 - c0*c3*c12)*c4 + s4*s12*c0);
-        J_(2,1) = -l3*s1 - l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
-        J_(2,2) = -l5*s12 - l6*s3*c12 + l7*s3*c12 - l8*(s4*c3*c12 + s12*c4);
-        J_(2,3) = (-l6*c3 + l7*c3 + l8*s3*s4)*s12;
-        J_(2,4) = -l8*(s4*c12 + s12*c3*c4);
-        J_(3,1) = c0; J_(3,2) = c0; J_(3,3) = s0*s12;
-        J_(3,4) = -s0*s3*c12 + c0*c3;
-        J_(3,5) = s0*s4*c3*c12 + s0*s12*c4 + s3*s4*c0;
-        J_(4,1) = s0; J_(4,2) = s0; J_(4,3) = -s12*c0;
-        J_(4,4) = s0*c3 + s3*c0*c12;
-        J_(4,5) = s0*s3*s4 - s4*c0*c3*c12 - s12*c0*c4;
-        J_(5,0) = 1; J_(5,3) = c12; J_(5,4) = s3*s12;
-        J_(5,5) = -s4*s12*c3 + c4*c12;
 
-        return J_;
+        // 2. FK Kernel 실행 (AutoDiff 타입)
+        // Tip까지의 변환을 구함
+        const ADTransform tf_res = fk_kernel<ADScalar>(q_ad[0], q_ad[1], q_ad[2], q_ad[3], q_ad[4], q_ad[5]);
+
+        // EE Offset 적용 (만약 존재한다면)
+        if (tf_ee) {
+            // // double형 Transform을 ADScalar형으로 변환
+            // ADTransform tf_offset;
+            // mat4 m = tf_ee->matrix();
+            // for(int r=0; r<4; ++r) for(int c=0; c<4; ++c)
+            //     tf_offset.matrix()(r,c) = ADScalar(m(r,c));
+            //     // 상수는 미분값이 0이므로 생성자에서 자동 처리됨
+            //
+            // tf_res = tf_res * tf_offset;
+        }
+
+
+        // 3. 자코비안 추출
+        mat<6, 6> J_ad = mat<6, 6>::Zero();
+
+
+        // 3-1. Linear Velocity Jacobian (Position의 미분)
+        const ADVec<3> pos = tf_res.translation();
+        for (int i = 0; i < 3; ++i) {
+            // pos(i).derivatives()는 6x1 벡터
+            J_ad.row(i) = pos(i).derivatives();
+        }
+
+
+        // 3-2. Angular Velocity Jacobian (Rotation 미분)
+        // 공식: [w]x = R_dot * R^T
+        ADMat<3, 3> R_ad = tf_res.rotation();
+        mat3 R_val; // 값만 추출 (double)
+        for(int r=0; r<3; r++)
+        {
+            for(int c=0; c<3; c++)
+            {
+                R_val(r,c) = R_ad(r,c).value();
+            }
+        }
+
+
+        // 각 Joint 변수(q_j)에 대해
+        for (int j = 0; j < 6; ++j)
+        {
+            mat3 dR_dq; // dR / dq_j
+            for(int r=0; r<3; r++) for(int c=0; c<3; c++)
+            {
+
+                dR_dq(r,c) = R_ad(r,c).derivatives()(j);
+
+            }
+
+
+            // Skew Matrix S = dR_dq * R^T
+            mat3 S = dR_dq * R_val.transpose();
+
+            // S = [[ 0, -wz, wy], [wz, 0, -wx], [-wy, wx, 0]]
+            J_ad(3, j) = S(2, 1); // wx
+            J_ad(4, j) = S(0, 2); // wy
+            J_ad(5, j) = S(1, 0); // wz
+        }
+
+
+        return J_ad;
     }
 
 
     // ----------------------------------------------------
-    // QP Solver (Projected Gauss-Seidel)
+    // QP Solver (기존 유지)
     // ----------------------------------------------------
     vec<6> solve_QP(const mat<6, 6>& H, const vec<6>& g, const vec<6>& lb, const vec<6>& ub)
     {
-
         vec<6> x = vec<6>::Zero();
-
         for (int iter = 0; iter < MAX_QP_ITER; ++iter) {
             double max_diff = 0.0;
             for (int i = 0; i < 6; ++i) {
                 double old_xi = x(i);
-
                 double sigma = 0.0;
                 for (int j = 0; j < 6; ++j) {
                     if (i != j) sigma += H(i, j) * x(j);
                 }
-
                 double x_unc = (-g(i) - sigma) / H(i, i);
-
-                // Projection (Clamping)
                 double x_new = std::max(lb(i), std::min(ub(i), x_unc));
-
                 x(i) = x_new;
                 max_diff = std::max(max_diff, std::abs(x_new - old_xi));
             }
-
-
-            if (max_diff < ERROR_QP_THREASHOLD)
-                break;
+            if (max_diff < ERROR_QP_THREASHOLD) break;
         }
-
         return x;
     }
 
 
     // ----------------------------------------------------
-    // Inverse Kinematics
+    // Inverse Kinematics (기존 로직 유지, Jacobian 호출만 변경됨)
     // ----------------------------------------------------
     vec<6> ik(const Transform& target_tf)
     {
@@ -315,103 +363,61 @@ private:
 
         for (int iter = 0; iter < MAX_IK_ITER; ++iter)
         {
-            // 오차 계산
             Transform current_tf = fk(q[0], q[1], q[2], q[3], q[4], q[5]);
-
-            vec<6> error_twist = target_tf - current_tf;
+            vec<6> error_twist = Transform::twist(current_tf, target_tf);
 
             vec<6> dx;
-            dx <<   error_twist.head<3>(),  // Linear
-                    error_twist.tail<3>();  // Angular
+            dx << error_twist.head<3>(), error_twist.tail<3>();
 
-
-            if (dx.norm() < ERROR_IK_TGREASHOLD)
-                break;
-
+            if (dx.norm() < ERROR_IK_TGREASHOLD) break;
 
             vec3 curr_pos = current_tf.translation();
 
-
-            // QP: Workspace Limit
-            // 범위에 도달할 경우 해당 축방향의 속도를 감속시킴
-            for (int i = 0; i < 3; ++i)
-            {
-                // Min Boundary
-                double dist_min = curr_pos(i) - workspace_min(i); // 벽까지 거리
-
-                if (dist_min < WORKSPACE_LIMIT_MARGIN)
-                {
-                    if (dx(i) < 0) // 벽 밖으로 나가려 할 때
-                    {
-                        // 0.0 (벽) ~ 1.0 (안전지대) 비율 계산
+            // QP: Workspace Limit (감속 로직)
+            for (int i = 0; i < 3; ++i) {
+                double dist_min = curr_pos(i) - workspace_min(i);
+                if (dist_min < WORKSPACE_LIMIT_MARGIN) {
+                    if (dx(i) < 0) {
                         double ratio = std::max(0.0, dist_min / WORKSPACE_LIMIT_MARGIN);
-
-                        double scaling = ratio * ratio; // Quadratic
-
-                        dx(i) *= scaling;
+                        dx(i) *= (ratio * ratio);
                     }
                 }
-
-                // Max Boundary
                 double dist_max = workspace_max(i) - curr_pos(i);
-
-                if (dist_max < WORKSPACE_LIMIT_MARGIN)
-                {
-                    if (dx(i) > 0)
-                    {
+                if (dist_max < WORKSPACE_LIMIT_MARGIN) {
+                    if (dx(i) > 0) {
                         double ratio = std::max(0.0, dist_max / WORKSPACE_LIMIT_MARGIN);
-
-                        double scaling = ratio * ratio;
-
-                        dx(i) *= scaling;
+                        dx(i) *= (ratio * ratio);
                     }
                 }
             }
 
-
-            // 자코비안 행렬 계산
+            // [변경점] AutoDiff Jacobian 계산 호출
             J = jacobian(q[0], q[1], q[2], q[3], q[4], q[5]);
 
-
-            // QP: Hessian Matrix
-            // H = J^T * J + lambda * I
+            // QP 구성 (Hessian, Gradient)
             mat<6, 6> H = J.transpose() * J;
-            for (int i = 0; i < 6; i++)
-                H(i, i) += LAMBDA;
+            for (int i = 0; i < 6; i++) H(i, i) += LAMBDA;
 
-
-            // QP: Gradient Vector
-            // g = -J^T * dx
             vec<6> g = -J.transpose() * dx;
 
-
-            // QP: 관절 범위 제한
+            // 관절 범위 제한
             vec<6> lb, ub;
             for(int i=0; i<6; ++i) {
                 double d_min = (joint_limits[i].min + JOINT_LIMIT_MARGIN) - q[i];
                 double d_max = (joint_limits[i].max - JOINT_LIMIT_MARGIN) - q[i];
-
                 lb(i) = std::max(d_min, -JOINT_STEP_LIMIT);
                 ub(i) = std::min(d_max, JOINT_STEP_LIMIT);
             }
 
-
-
-            // 각도 업데이트
             vec<6> dq = solve_QP(H, g, lb, ub);
             q += dq * STEP_SIZE;
         }
 
-
-        // 각도 정규화
-        for (int i=0; i<6; ++i)
-            q[i] = NORM_RAD_180(q[i]);
-
+        for (int i=0; i<6; ++i) q[i] = NORM_RAD_180(q[i]);
 
         return q;
     }
 };
-
 
 // ----------------------------------------------------------------------------------
 // Main Function
@@ -512,7 +518,7 @@ int main() {
             if (ImGui::Button("엔드 이펙터 설정"))
             {
                 vec3 pos = vec3(ee_pos[0], ee_pos[1], ee_pos[2]);
-                AngleAxis ori = AngleAxis( DEG_TO_RAD(0), vec3::UnitZ());
+                Eigen::AngleAxis ori = Eigen::AngleAxis( DEG_TO_RAD(0), vec3::UnitZ());
                 Transform tf = Transform(ori, pos);
                 m1013.set_end_effector(tf);
             }
@@ -539,7 +545,6 @@ int main() {
             ImGui::End();
         });
 
-        // duration
         auto t1 = std::chrono::high_resolution_clock::now();
 
 
@@ -553,10 +558,9 @@ int main() {
             m1013.movej(DEG_TO_RAD(q0), DEG_TO_RAD(q1), DEG_TO_RAD(q2), DEG_TO_RAD(q3), DEG_TO_RAD(q4), DEG_TO_RAD(q5));
         }
 
-        // duration
+
         auto t2 = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> elapsed_seconds = t2 - t1;
-        std::cout << "Time Elapsed: " << elapsed_seconds.count() << "s" << std::endl;
+
 
         // 시각화 객체 업데이트
         joint1.setTransform(m1013.get_fk(M1013::TF_Joint1));     // 1
