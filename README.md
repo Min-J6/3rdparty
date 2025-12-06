@@ -40,6 +40,8 @@ target_link_libraries(main
 ```c++
 // main.cpp
 #include "imgui.h"
+#include <iostream>
+
 
 int main() {
 
