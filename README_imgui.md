@@ -19,7 +19,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 
 # 서브 모듈
-add_subdirectory(imgui)  # <- 추가
+add_subdirectory(lib/imgui)  # <- 추가
 
 
 # 실행 파일
@@ -34,12 +34,9 @@ target_link_libraries(main
 )
 ```
 
-
 main.cpp:
 ```c++
-#include <iostream>
 #include "imgui.h"
-
 
 int main() {
 
