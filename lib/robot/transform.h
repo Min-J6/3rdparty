@@ -1,5 +1,4 @@
 #pragma once
-// Eigen 헤더
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <iostream>
@@ -38,8 +37,6 @@ using AngleAxis = Eigen::AngleAxisd;
 
 namespace Robot
 {
-
-
 
 template <typename Scalar>
 class TransformT {
@@ -163,5 +160,6 @@ template<int Rows>
 using ADVec = Eigen::Matrix<ADScalar, Rows, 1>;
 template<int Rows, int Cols>
 using ADMat = Eigen::Matrix<ADScalar, Rows, Cols>;
+
 }
 
