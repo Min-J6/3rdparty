@@ -456,7 +456,7 @@ int main() {
         m1013.workspace_min = vec3(ws_min[0], ws_min[1], ws_min[2]);
         m1013.workspace_max = vec3(ws_max[0], ws_max[1], ws_max[2]);
 
-        ImGui::draw([&]()
+        ImGui::context([&]()
         {
             ImGui::Begin("Control Panel");
 

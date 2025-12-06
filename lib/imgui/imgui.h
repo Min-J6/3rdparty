@@ -4441,7 +4441,7 @@ namespace ImGui
 {
     void start(const char* title, const ImVec2& size = ImVec2(1280, 720));
     void stop();
-    void draw(std::function<void()> func);
+    void context(std::function<void()> func);
     bool isRunning();
 }
 

@@ -872,7 +872,7 @@ int main(int argc, char* argv[])
         while (ImGui::isRunning())
         {
             // Axis Transform 설정
-            ImGui::draw([&]()
+            ImGui::context([&]()
             {
                 ImGui::Begin("Axis Transform");
                 joint1.setTransform(m1013.get_fk(1));

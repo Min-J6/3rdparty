@@ -623,7 +623,7 @@ namespace ImGui
     {
         ImGuiBackground::stop_background();
     }
-    void draw(std::function<void()> render_callback)
+    void context(std::function<void()> render_callback)
     {
         ImGuiBackground::show_imgui(render_callback);
     }
