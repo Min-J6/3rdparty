@@ -2,7 +2,7 @@
 
 
 ```shell
-  git clone --branch imgui --single-branch https://github.com/Min-J6/lib/tree/imgui
+  git clone --branch imgui --single-branch https://github.com/Min-J6/lib
 ```
 
 CMakeLists.txt:
