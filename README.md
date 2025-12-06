@@ -4,9 +4,10 @@
 ```shell
   git clone --branch imgui --single-branch https://github.com/Min-J6/lib
 ```
+<br>
 
-CMakeLists.txt:
 ```cmake
+# CMakeLists.txt
 cmake_minimum_required(VERSION 3.10)
 cmake_policy(SET CMP0167 NEW)
 
@@ -34,8 +35,10 @@ target_link_libraries(main
 )
 ```
 
-main.cpp:
+<br>
+
 ```c++
+// main.cpp
 #include "imgui.h"
 
 int main() {
@@ -46,11 +49,14 @@ int main() {
     {
         ImGui::context([]()
                 {
-                    ImGui::Begin("창1");
+                    ImGui::Begin("테스트 윈도우");
 
                     ImGui::Text("abc123");
                     ImGui::Text("ABC456");
-
+                    
+                    if (ImGui::Button("버튼")) {
+                        std::cout << "Hello?" << std::endl;
+                    }
                     ImGui::End();
                 });
     }
