@@ -2,7 +2,7 @@
 
 
 ```shell
-  git clone --branch imgui --single-branch https://github.com/Min-J6/lib
+  git clone --branch imgui --single-branch https://github.com/Min-J6/3rdparty
 ```
 <br>
 
@@ -20,7 +20,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 
 # 서브 모듈
-add_subdirectory(lib/imgui)  # <- 추가
+add_subdirectory(3rdparty/imgui)  # <- 추가
 
 
 # 실행 파일
