@@ -1,39 +1,42 @@
 cmake_minimum_required(VERSION 3.10)
-project(ImGuiTransparentDemo)
-
-# CMake 정책 경고(CMP0167)를 제거하고 최신 Boost 설정 방식을 따릅니다.
 cmake_policy(SET CMP0167 NEW)
+
+project(ImGuiTransparentDemo)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native -ffast-math")
 
-find_package(Boost REQUIRED COMPONENTS system regex)
-find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
-add_subdirectory(lib/imgui)
-add_subdirectory(lib/CycloneDDS)
+# Add lib
+add_subdirectory(CycloneDDS)
 
-add_executable(main
-    main.cpp
+
+# idl 파일 빌드
+idlc_generate(
+        TARGET Ping_idl                              # 생성될 Idl 라이브러리 이름
+        FILES "${CMAKE_CURRENT_SOURCE_DIR}/ping.idl" # idl 파일
+        WARNINGS no-implicit-extensibility
 )
 
-# 🚀 SIMD 최적화 플래그: Eigen 및 기타 연산을 위해 추가합니다.
-#target_compile_options(main PRIVATE
-#    -O3                             # 최고 수준의 최적화
-#    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-march=native> # 현재 CPU에 맞는 최적 명령어셋 사용
-#    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-mavx2>        # AVX2 명령어셋 활성화
-#)
+
+# 실행 파일
+add_executable(main_pub
+    main_pub.cpp
+)
+
+add_executable(main_sub
+    main_sub.cpp
+)
+target_link_libraries(main_sub
+        PRIVATE
+        CycloneDDS::ddsc
+        Ping_idl
+)
 
 
-target_link_libraries(main PRIVATE imgui Eigen3::Eigen)
-
-
-find_package(LAPACK REQUIRED)
-find_package(BLAS REQUIRED)
-
-target_link_libraries(main PRIVATE ${LAPACK_LIBRARIES})
-target_link_libraries(main PRIVATE ${BLAS_LIBRARIES})
-
-
-add_subdirectory(test)
+# 링크
+target_link_libraries(main_pub
+        PRIVATE
+        CycloneDDS::ddsc
+        Ping_idl
+)
