@@ -1,4 +1,4 @@
-# Cyclone DDS Ping Demo
+# Cyclone DDS
 *   **Cyclone DDS** 라이브러리를 서브 모듈로 포함하여 빌드합니다.
 *   IDL(Interface Definition Language)을 사용하여 데이터 타입을 정의하고, 이를 통해 코드를 생성합니다.
 *   ROS2와의 상호 운용성을 테스트할 수 있는 구조를 가지고 있습니다.
@@ -6,7 +6,7 @@
 ## 프로젝트 구조
 
 ```text
-ImGuiThread/
+workspace/
 ├── CycloneDDS/         # 3rdparty 라이브러리
 ├── idl/
 │   └── ping.idl        # 메시지 정의 파일
@@ -20,7 +20,7 @@ ImGuiThread/
 Cyclone DDS 라이브러리 클론 (프로젝트 루트에서 실행)
 
 ```bash
-  # 프로젝트 디렉토리에 3rdparty가 생김
+  # 3rdparty 디렉토리가 생김
   git clone --branch ddsc --single-branch https://github.com/Min-J6/3rdparty.git
 ```
 
