@@ -2,8 +2,16 @@
 
 
 ```shell
+  # Clone
   git clone --branch imgui --single-branch https://github.com/Min-J6/lib
 ```
+<br>
+
+```shell
+  # Install GLFW3
+  sudo apt install libglfw3 libglfw3-dev
+```
+
 <br>
 
 ```cmake
