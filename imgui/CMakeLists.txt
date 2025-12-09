@@ -43,7 +43,18 @@ target_include_directories(imgui PUBLIC
 
 
 # 외부 라이브러리 연결 (ImGui 백엔드용)
-find_package(glfw3 REQUIRED)
+find_package(glfw3 QUIET)
+if(NOT glfw3_FOUND)
+    message(FATAL_ERROR "\n"
+            "-------------------------------------------------------\n"
+            " [Error] GLFW library not found!\n"
+            " GLFW 라이브러리를 찾을 수 없습니다.\n"
+            " 아래 명령어를 사용하여 설치해 주세요:\n\n"
+            " sudo apt install libglfw3-dev\n"
+            "-------------------------------------------------------"
+    )
+endif()
+
 find_package(OpenGL REQUIRED)
 find_package(X11 REQUIRED)
 
