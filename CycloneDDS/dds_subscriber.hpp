@@ -2,10 +2,7 @@
 extern "C" {
 #include "dds/dds.h"
 }
-
 #include <string>
-#include <thread>
-#include <atomic>
 #include <functional>
 
 

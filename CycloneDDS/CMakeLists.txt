@@ -131,3 +131,9 @@ if(ENABLE_ICEORYX)
 endif()
 add_subdirectory(core)
 add_library(compat INTERFACE)
+
+
+target_include_directories(ddsc INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:include>
+)
