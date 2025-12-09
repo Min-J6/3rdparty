@@ -20,7 +20,8 @@ ImGuiThread/
 Cyclone DDS 라이브러리 클론 (프로젝트 루트에서 실행)
 
 ```bash
-  git clone --branch imgui --single-branch https://github.com/Min-J6/3rdparty/tree/ddsc
+  # 프로젝트 디렉토리에 3rdparty가 생김
+  git clone --branch ddsc --single-branch https://github.com/Min-J6/3rdparty.git
 ```
 
 > **참고:** 현재 설정으로 `ros2 topic list`에는 토픽이 노출되지만, ROS2 시스템이 `ping.idl`의 정의를 알지 못해 메시지 내용을 직접 읽을 수는 없습니다.\
@@ -40,7 +41,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Lib 추가
-add_subdirectory(CycloneDDS)
+add_subdirectory(3rdparty/CycloneDDS)
 
 
 # IDL 코드 생성
