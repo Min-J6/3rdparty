@@ -20,6 +20,8 @@
 #include "implot.h"
 #include "implot3d.h"
 
+#include "stb/stb_image.h"
+
 // 윈도우 크기
 std::string TITLE               = "DEMO";
 float WINDOW_WIDTH              = 1280;
@@ -351,6 +353,13 @@ bool ImGuiBackground::run() {
             if (render_callback) {
                 render_callback();
             }
+
+            if (!context_queue.empty())
+            {
+                auto context = context_queue.front();
+                context_queue.pop();
+                context();
+            }
         }
 
 
@@ -613,22 +622,109 @@ void ImGuiBackground::stopBackground() {
 }
 
 
+void ImGuiBackground::load_image(const std::string& path, GLuint &texture_id, int &width, int &height)
+{
+    getInstance().context_queue.push([&, path]()
+    {
+        // 1. 이미지 로드
+        int image_width = 0;
+        int image_height = 0;
+        int channels = 0;
+
+        // R, G, B, A (png)
+        unsigned char* image_data = stbi_load(path.c_str(), &image_width, &image_height, &channels, 4);
+
+        if (image_data == NULL)
+        {
+            std::cerr << "[Error] [ImGui App]: 이미지 로드 실패: " << path << std::endl;
+            return;
+        }
+
+
+        // OpenGL 텍스처 생성
+        texture_id = 0;
+        glGenTextures(1, &texture_id);
+        glBindTexture(GL_TEXTURE_2D, texture_id);
+
+
+        // 텍스처 파라미터 설정
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+
+        // 텍스처에 이미지 데이터 업로드 (GL_RGBA 포맷 사용)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, image_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data);
+
+        // 3. 이미지 데이터 해제
+        stbi_image_free(image_data);
+
+        width = image_width;
+        height = image_height;
+    });
+}
+
+void ImGuiBackground::release_image(GLuint &texture_id)
+{
+    getInstance().context_queue.push([&, texture_id]()
+    {
+        glDeleteTextures(1, &texture_id);
+    });
+}
+
 namespace ImGui
 {
     void start(const char* title, const ImVec2& size)
     {
         ImGuiBackground::start_background(title, size);
     }
+
+
     void stop()
     {
         ImGuiBackground::stop_background();
     }
+
+
     void context(std::function<void()> render_callback)
     {
         ImGuiBackground::show_imgui(render_callback);
     }
+
+
     bool isRunning()
     {
         return ImGuiBackground::is_running();
+    }
+
+
+    Image_::~Image_()
+    {
+        if (texture_id)
+        {
+            ImGuiBackground::release_image(texture_id);
+        }
+    }
+
+    std::shared_ptr<Image_> load_image(const std::string &path)
+    {
+        GLuint texture_id = 0;
+        int width, height;
+
+        ImGuiBackground::load_image(path, texture_id, width, height);
+
+
+        while (texture_id == 0)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+
+        std::shared_ptr<Image_> img = std::make_shared<Image_>();
+        img->texture_id = texture_id;
+        img->size = ImVec2(width, height);
+
+        return img;
     }
 }

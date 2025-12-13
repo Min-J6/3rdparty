@@ -12,7 +12,7 @@
 
 
 #include "imgui.h"
-
+#include "imgui_impl_opengl3_loader.h"
 
 
 class ImGuiBackground {
@@ -28,6 +28,13 @@ public:
 
     // ImGui 앱이 실행 중인지 확인
     static bool is_running();
+
+    // 이미지 불러오기
+    static void load_image(const std::string& path, GLuint& texture_id, int& width, int& height);
+
+
+    // 이미지 리소스 해제
+    static void release_image(GLuint& texture_id);
 
 
 private:
@@ -62,6 +69,8 @@ private:
     // 렌더링 콜백
     std::function<void()> render_callback = nullptr;
     std::mutex callback_mutex;
+
+    std::queue<std::function<void()>> context_queue;
 
     std::thread render_thread;
     std::atomic<bool> _is_running{false};

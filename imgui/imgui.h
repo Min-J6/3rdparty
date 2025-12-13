@@ -4436,14 +4436,6 @@ typedef ImFontAtlasRect ImFontAtlasCustomRect;
 // May be convenient for some users to only explicitly include vanilla imgui.h and have extra stuff included.
 #ifndef IMGUI_INCLUDE_IMGUI_USER_H
 #define IMGUI_INCLUDE_IMGUI_USER_H
-#include <functional>
-namespace ImGui
-{
-    void start(const char* title, const ImVec2& size = ImVec2(1280, 720));
-    void stop();
-    void context(std::function<void()> func);
-    bool isRunning();
-}
-
+#include "mygui.h"
 #endif
 #endif // #ifndef IMGUI_DISABLE
