@@ -20,6 +20,8 @@
 #include "implot.h"
 #include "implot3d.h"
 
+
+#define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 
 // 윈도우 크기
@@ -673,6 +675,32 @@ void ImGuiBackground::release_image(GLuint &texture_id)
     });
 }
 
+void ImGuiBackground::context_push(std::function<void()> func)
+{
+    getInstance().context_queue.push(func);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 namespace ImGui
 {
     void start(const char* title, const ImVec2& size)
@@ -707,23 +735,54 @@ namespace ImGui
         }
     }
 
+
     std::shared_ptr<Image_> load_image(const std::string &path)
     {
-        GLuint texture_id = 0;
-        int width, height;
-
-        ImGuiBackground::load_image(path, texture_id, width, height);
-
-
-        while (texture_id == 0)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-
-
         std::shared_ptr<Image_> img = std::make_shared<Image_>();
-        img->texture_id = texture_id;
-        img->size = ImVec2(width, height);
+
+
+        ImGuiBackground::context_push([img, path]()
+        {
+            // 1. 이미지 로드 (stbi_load)
+            int image_width = 0;
+            int image_height = 0;
+            int channels = 0;
+
+            unsigned char* image_data = stbi_load(path.c_str(), &image_width, &image_height, &channels, 4);
+
+
+            if (image_data == NULL)
+            {
+                std::cerr << "[Error] [ImGui App]: 이미지 로드 실패: " << path << std::endl;
+                return;
+            }
+
+
+            // OpenGL 텍스처 생성
+            GLuint texture_id = 0;
+            glGenTextures(1, &texture_id);
+            glBindTexture(GL_TEXTURE_2D, texture_id);
+
+
+            // 텍스처 파라미터 설정 (생략하지 않고 내부적으로 처리)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+
+            // 텍스처에 이미지 데이터 업로드
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, image_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data);
+
+
+            // 이미지 데이터 해제
+            stbi_image_free(image_data);
+
+
+            img->texture_id = texture_id;
+            img->size = ImVec2(image_width, image_height);
+        });
+
 
         return img;
     }

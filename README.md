@@ -2,6 +2,15 @@
 * ImGui 라이브러리를 서브 모듈로 포함하여 빌드합니다.
 * 간단한 래핑 클래스로 쉽게 사용할 수 있습니다.
 
+![screenshot1.png](imgui/sample/screenshot1.png)
+![screenshot2.png](imgui/sample/screenshot2.png)
+
+<br>
+
+> 참고: Git Clone으로 사용할 경우 아래 방법을 따라주세요.\
+> 라이브러리가 3rdparty 디렉토리에 있다고 가정합니다.
+
+<br>
 
 ## 프로젝트 구조
 ```text
@@ -99,3 +108,4 @@ int main()
     return 0;
 }
 ```
+

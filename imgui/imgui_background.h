@@ -32,9 +32,11 @@ public:
     // 이미지 불러오기
     static void load_image(const std::string& path, GLuint& texture_id, int& width, int& height);
 
-
     // 이미지 리소스 해제
     static void release_image(GLuint& texture_id);
+
+    // OpenGL 컨텍스트에 작업 푸시
+    static void context_push(std::function<void()> func);
 
 
 private:
