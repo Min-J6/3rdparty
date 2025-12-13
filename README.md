@@ -1,7 +1,7 @@
 # Cyclone DDS
 *   **Cyclone DDS** 라이브러리를 서브 모듈로 포함하여 빌드합니다.
-*   IDL(Interface Definition Language)을 사용하여 데이터 타입을 정의하고, 이를 통해 코드를 생성합니다.
-*   ROS2와의 상호 운용성을 테스트할 수 있는 구조를 가지고 있습니다.
+*   IDL(Interface Definition Language)을 사용하여 데이터 타입을 정의하고 코드를 생성합니다.
+*   ROS2의 표준 메세지를 받을 수 있지만 보내기는 아직 지원하지 않습니다.
 
 ## 프로젝트 구조
 
