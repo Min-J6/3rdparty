@@ -1,6 +1,7 @@
 # Imgui
 * ImGui 라이브러리를 서브 모듈로 포함하여 빌드합니다.
 * 간단한 래핑 클래스로 쉽게 사용할 수 있습니다.
+* ImPlot과 ImPlot3D가 포함되어 있습니다.
 
 ![screenshot1.png](imgui/sample/screenshot1.png)
 ![screenshot2.png](imgui/sample/screenshot2.png)
