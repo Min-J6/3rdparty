@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.10)
 # IDL 파일 빌드
 idlc_generate(
     TARGET Ping_idl                                  # 생성될 Idl 라이브러리 이름
-    FILES "${CMAKE_CURRENT_SOURCE_DIR}/String.idl" # idl 파일
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/PingData.idl" # idl 파일
     WARNINGS no-implicit-extensibility
 )
 
