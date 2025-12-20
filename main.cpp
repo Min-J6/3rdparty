@@ -1,38 +1,17 @@
-#include <implot.h>
-#include <implot3d.h>
-#include <iostream>
-#include "imgui.h"
-
-
-
-
-
-
-
+#include "dds_publisher.hpp"
+#include "example.h"
 
 int main() {
-    std::cout << "Hello, World!" << std::endl;
 
 
+    Publisher<Message> pub("rt/example_topic", &Message_desc);
 
-
-    ImGui::start("데모");
-
-    while (ImGui::isRunning())
+    for (int i = 0; i < 100; ++i)
     {
-
-
-
-        ImGui::context([&]()
-        {
-            ImGui::Begin("Draw");
-
-            ImGui::End();
-
-        });
+        Message msg;
+        msg.text =  ("Hello, World!" + std::to_string(i)).data();
+        pub.publish(msg);
     }
-    ImGui::stop();
-
 
     return 0;
 }
