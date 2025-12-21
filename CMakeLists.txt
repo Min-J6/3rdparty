@@ -21,3 +21,6 @@ idlc_generate(
 )
 
 target_link_libraries(main lib_imgui ddsc idl_example)
+
+
+add_executable(client client.cpp)

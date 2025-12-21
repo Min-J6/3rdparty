@@ -1,22 +1,35 @@
-#include <vector>
-#include "3rdparty/yaml.hpp"
+#include <thread>
+#include "3rdparty/socket_server.hpp"
+
+
+void on_receive_callback(std::shared_ptr<SessionInterface> client, const std::string& message)
+{
+    client->deliver("Server's response: " + message + "\n");
+}
+
+void on_connect_callback(std::shared_ptr<SessionInterface> client)
+{
+    std::cout << "Client connected from " << client->ip() << std::endl;
+}
+
+void on_disconnect_callback(std::shared_ptr<SessionInterface> client)
+{
+    std::cout << "Client disconnected from " << client->ip() << std::endl;
+}
 
 int main()
 {
-    Yaml config;
-    config.load("settings.yaml");
+    Server server(8080);
+    server.on_receive = on_receive_callback;
+    server.on_accept = on_connect_callback;
+    server.on_disconnect = on_disconnect_callback;
 
-    // 1. 값 읽기 (없으면 기본값으로 파일에 저장됨)
-    int width = config.get("window.size.width", 1920);
-    std::string title = config.get("window.title", std::string("My Game"));
+    server.start();
 
-    // 2. 리스트 읽기
-    std::vector<int> scores = config.get("player.scores", std::vector<int>({10, 20, 30}));
-
-    // 3. 값 쓰기
-    config.set("network.ip", "127.0.0.1");
-    config.set("window.size.height", 1080);
-
+    while (true)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
     return 0;
 }
