@@ -8,6 +8,8 @@
 <br>
 
 ## Shared Memory
+* 프로세스간 데이터 공유를 할 수 있습니다.
+* SharedMemory::unlink()를 호출하기 전까지 메모리가 유지됩니다.
 
 ```c++
 #include "shared_mem.hpp"
@@ -45,6 +47,8 @@ int main()
 
 
 ## YAML
+* 간단한 yaml 파싱 및 설정 기능을 제공합니다.
+
 ```c++
 #include "3rdparty/yaml.hpp"
 
