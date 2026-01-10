@@ -15,4 +15,8 @@ if (PROJECT_IS_TOP_LEVEL)
     target_include_directories(example_shared_memory PRIVATE 3rdparty)          # shared mem
     add_executable(example_yaml example/yaml/example_yaml.cpp)  # yaml
     target_include_directories(example_yaml PRIVATE 3rdparty)   # yaml
-endif ()
+    add_executable(example_server example/socket/example_server.cpp) # socket
+    target_include_directories(example_server PRIVATE 3rdparty)      # socket
+    add_executable(example_client example/socket/example_client.cpp) # socket
+    target_include_directories(example_client PRIVATE 3rdparty)      # socket
+endif()
