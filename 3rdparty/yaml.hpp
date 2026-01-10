@@ -44365,24 +44365,24 @@ using namespace c4;
 
 class Yaml {
 public:
-    Yaml() = default;
+    Yaml(const std::string& file_path)
+    {
+        if (!load(file_path))
+            std::cerr << "[Yaml] 로드 실패:" << file_path << std::endl;
+    }
 
     // 소멸 시 경로가 지정되어 있다면 자동 저장
-    ~Yaml() {
-        if (!m_path.empty()) {
-            save();
-        }
+    ~Yaml()
+    {
+        if (!save())
+            std::cerr << "[Yaml] 저장 실패:" << m_path << std::endl;
     }
 
     // 파일 로드
-    bool load(const std::string& path) {
+    bool load(const std::string& path)
+    {
         m_path = path;
         std::ifstream f(m_path);
-        if (!f.is_open()) {
-            m_tree.clear();
-            m_tree.rootref() |= c4::yml::MAP;
-            return false;
-        }
 
         std::stringstream buffer;
         buffer << f.rdbuf();
@@ -44391,31 +44391,32 @@ public:
         try {
             m_tree = c4::yml::parse_in_arena(c4::to_csubstr(m_raw));
         } catch (const std::exception& e) {
-            std::cerr << "[Yaml] Parse Error: " << e.what() << std::endl;
+            std::cerr << "[Yaml] 파싱 실패: " << e.what() << std::endl;
             m_tree.clear();
             m_tree.rootref() |= c4::yml::MAP;
-            return false;
+            return false; // 파싱 실패
         }
-        return true;
+
+        return true; // 성공
     }
 
     // 파일 저장
-    bool save() const {
-        if (m_path.empty()) return false;
+    bool save() const
+    {
         FILE* f = std::fopen(m_path.c_str(), "w");
-        if (!f) return false;
+        if (!f)
+            return false; // 파일 쓰기 실패
+
         c4::yml::emit_yaml(m_tree, f);
         std::fclose(f);
+
         return true;
     }
 
-    // ----------------------------------------------------
-    // GETTERS (읽기)
-    // ----------------------------------------------------
-
-    // 1. 단일 값 읽기 (기본값 제공)
+    // Getter 단일 값 읽기
     template<typename T>
-    T get(const std::string& key, const T& defaultValue) {
+    T get(const std::string& key, const T& defaultValue)
+    {
         auto node = findNode(key);
         if (node.valid() && node.has_val()) {
             T val;
@@ -44430,9 +44431,16 @@ public:
         return defaultValue;
     }
 
-    // 2. 리스트 읽기 (기본값 제공)
     template<typename T>
-    std::vector<T> get(const std::string& key, const std::vector<T>& defaultList) {
+    T get(const std::string& key)
+    {
+        return get(key, T());
+    }
+
+    // Getter 리스트 읽기
+    template<typename T>
+    std::vector<T> get(const std::string& key, const std::vector<T>& defaultList)
+    {
         auto node = findNode(key);
         if (node.valid() && node.is_seq()) {
             std::vector<T> result;
@@ -44447,30 +44455,34 @@ public:
         return defaultList;
     }
 
+    // Getter 리스트 읽기
     template<typename T>
-    std::vector<T> get(const std::string& key, std::initializer_list<T> defaultList) {
+    std::vector<T> get(const std::string& key, std::initializer_list<T> defaultList)
+    {
         return get(key, std::vector<T>(defaultList));
     }
 
-    std::string get(const std::string& key, const char* defaultValue) {
-        return get(key, std::string(defaultValue));
+    // Getter 문자열 읽기
+    std::string get(const std::string& key, const char* defaultValue = NULL)
+    {
+        if (defaultValue == NULL)
+            return get(key, std::string(""));
+        else
+            return get(key, std::string(defaultValue));
     }
 
-
-    // ----------------------------------------------------
-    // SETTERS (쓰기)
-    // ----------------------------------------------------
-
-    // 1. 단일 값 쓰기
+    // Setter 단일 값 쓰기
     template<typename T>
-    void set(const std::string& key, const T& val) {
+    void set(const std::string& key, const T& val)
+    {
         auto node = ensureNode(key);
         node << val;
     }
 
-    // 2. 리스트 쓰기
+    // Setter 리스트 쓰기
     template<typename T>
-    void set(const std::string& key, const std::vector<T>& list) {
+    void set(const std::string& key, const std::vector<T>& list)
+    {
         auto node = ensureNode(key);
         node.clear_children();
         node |= c4::yml::SEQ;
@@ -44491,7 +44503,8 @@ private:
         int index = -1;
     };
 
-    static std::vector<PathSegment> parsePath(const std::string& path) {
+    static std::vector<PathSegment> parsePath(const std::string& path)
+    {
         std::vector<PathSegment> segs;
         std::regex re(R"(([^\.\[\]]+)(?:\[(\d+)\])?)");
         auto it = std::sregex_iterator(path.begin(), path.end(), re);
@@ -44505,7 +44518,8 @@ private:
         return segs;
     }
 
-    c4::yml::ConstNodeRef findNode(const std::string& path) const {
+    c4::yml::ConstNodeRef findNode(const std::string& path) const
+    {
         auto segs = parsePath(path);
         auto node = m_tree.rootref();
         for (const auto& s : segs) {
@@ -44519,7 +44533,8 @@ private:
         return node;
     }
 
-    c4::yml::NodeRef ensureNode(const std::string& path) {
+    c4::yml::NodeRef ensureNode(const std::string& path)
+    {
         auto segs = parsePath(path);
         auto node = m_tree.rootref();
         if (!node.valid()) node |= c4::yml::MAP;
@@ -44549,4 +44564,6 @@ private:
         return node;
     }
 };
+
+
 #endif
