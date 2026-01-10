@@ -73,6 +73,7 @@ int main() {
 
 
     // 공유 메모리 해제
+    // 직접 호출 하지 않으면 시스템 재부팅 전까지 메모리가 유지됨
     SharedMemory<int>::unlink(shm_name);
 
     return 0;
